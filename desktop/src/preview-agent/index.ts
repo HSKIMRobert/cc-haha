@@ -1,5 +1,5 @@
 import { createBridge } from './bridge'
-import { captureToDataUrl } from './screenshot'
+import { captureToDataUrl, captureAnnotatedRegion } from './screenshot'
 import { createPicker } from './picker'
 import { buildElementMetadata } from './metadata'
 
@@ -26,14 +26,14 @@ import { buildElementMetadata } from './metadata'
 
   const emitSelection = async (el: Element) => {
     try {
-      const dataUrl = await captureToDataUrl('element', el)
+      const dataUrl = await captureAnnotatedRegion(el)
       bridge.send({
         type: 'selection',
         payload: {
           pageUrl: window.location.href,
           sourceHint: document.title || undefined,
           element: buildElementMetadata(el),
-          screenshot: { dataUrl, kind: 'element' },
+          screenshot: { dataUrl, kind: 'region' },
         },
       })
     } catch (e) { bridge.reportError(String(e)) }
