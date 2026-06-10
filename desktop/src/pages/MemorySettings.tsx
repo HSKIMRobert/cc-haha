@@ -306,7 +306,7 @@ export function MemorySettings() {
           </section>
         </aside>
 
-        <section className="min-h-0 overflow-hidden bg-[var(--color-surface-container-lowest)]">
+        <section className="flex min-h-0 flex-col overflow-hidden bg-[var(--color-surface-container-lowest)]">
           <div className="grid gap-3 border-b border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-4 py-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
@@ -332,8 +332,8 @@ export function MemorySettings() {
 
           {selectedFile ? (
             isEditing ? (
-              <div className="min-h-[560px]">
-                <div className="flex h-10 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 text-xs font-medium uppercase tracking-normal text-[var(--color-text-tertiary)]">
+              <div className="flex min-h-0 flex-1 flex-col">
+                <div className="flex h-10 shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 text-xs font-medium uppercase tracking-normal text-[var(--color-text-tertiary)]">
                   <div className="flex min-w-0 items-center gap-2">
                     <span>{t('settings.memory.editor')}</span>
                     <span>MARKDOWN</span>
@@ -375,12 +375,12 @@ export function MemorySettings() {
                   value={draftContent}
                   onChange={(event) => updateDraft(event.target.value)}
                   spellCheck={false}
-                  className="h-[calc(100%-40px)] w-full resize-none overflow-auto bg-transparent p-5 font-mono text-[13px] leading-6 text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)]"
+                  className="min-h-0 flex-1 w-full resize-none overflow-auto bg-transparent p-5 font-mono text-[13px] leading-6 text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)]"
                 />
               </div>
             ) : (
-              <div className="min-h-[560px] overflow-y-auto">
-                <div className="flex h-10 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 text-xs font-medium uppercase tracking-normal text-[var(--color-text-tertiary)]">
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                <div className="flex h-10 shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 text-xs font-medium uppercase tracking-normal text-[var(--color-text-tertiary)]">
                   <div className="flex min-w-0 items-center gap-2">
                     <span>{t('settings.memory.preview')}</span>
                     <span>{t('settings.memory.rendered')}</span>
@@ -395,7 +395,7 @@ export function MemorySettings() {
                     icon={<PencilLine size={14} aria-hidden="true" />}
                   />
                 </div>
-                <div className="p-6">
+                <div className="min-h-0 flex-1 overflow-y-auto p-6">
                   <MarkdownRenderer
                     content={previewContent || ' '}
                     variant="document"
@@ -405,7 +405,7 @@ export function MemorySettings() {
               </div>
             )
           ) : (
-            <div className="flex min-h-[520px] items-center justify-center p-8">
+            <div className="flex min-h-0 flex-1 items-center justify-center p-8">
               <EmptyState icon={<FileText size={20} />} text={isLoadingFile ? t('common.loading') : t('settings.memory.selectFile')} />
             </div>
           )}

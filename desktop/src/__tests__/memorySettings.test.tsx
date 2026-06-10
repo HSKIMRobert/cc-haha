@@ -163,6 +163,16 @@ describe('MemorySettings', () => {
     expect(await screen.findByTestId('markdown-preview')).toHaveTextContent('Prefer small diffs')
   })
 
+  it('lets the markdown editor fill the remaining detail pane height', async () => {
+    render(<MemorySettings />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+
+    const editor = await screen.findByLabelText('Editor')
+    expect(editor).toHaveClass('min-h-0', 'flex-1', 'resize-none')
+    expect(editor.parentElement).toHaveClass('flex', 'min-h-0', 'flex-1', 'flex-col')
+  })
+
   it('cancels edit mode by discarding the unsaved draft', async () => {
     render(<MemorySettings />)
 
