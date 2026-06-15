@@ -42,6 +42,7 @@ export const MANAGED_PROVIDER_ENV_KEYS = [
 ] as const
 
 const CUSTOM_PROVIDER_MODEL_CAPABILITIES = 'thinking,effort,adaptive_thinking,max_effort'
+const XIAOMI_MIMO_MODEL_CAPABILITIES = 'thinking'
 const AUTH_ENV_KEYS = new Set(['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -182,6 +183,25 @@ function getPresetModelContextWindows(presetId: string): Record<string, number> 
   return PROVIDER_PRESETS.find((preset) => preset.id === presetId)?.modelContextWindows ?? {}
 }
 
+function isXiaomiMimoProvider(provider: SavedProvider, models: SavedProvider['models']): boolean {
+  const baseUrl = provider.baseUrl.toLowerCase()
+  const modelIds = Object.values(models).map((model) => model.toLowerCase())
+  return (
+    baseUrl.includes('xiaomimimo.com') ||
+    modelIds.some((model) => /^mimo-v\d/i.test(model))
+  )
+}
+
+function getCustomProviderModelCapabilities(
+  provider: SavedProvider,
+  models: SavedProvider['models'],
+): string {
+  if (isXiaomiMimoProvider(provider, models)) {
+    return XIAOMI_MIMO_MODEL_CAPABILITIES
+  }
+  return CUSTOM_PROVIDER_MODEL_CAPABILITIES
+}
+
 export function buildProviderAuthEnv(
   provider: SavedProvider,
   presetDefaultEnv: Record<string, string>,
@@ -243,12 +263,13 @@ export function buildProviderManagedEnv(
   }
 
   const presetDefaultEnv = getPresetDefaultEnv(provider.presetId)
+  const customProviderCapabilities = getCustomProviderModelCapabilities(provider, models)
   const customProviderCapabilityEnv =
     provider.presetId === 'custom'
       ? {
-          ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES: CUSTOM_PROVIDER_MODEL_CAPABILITIES,
-          ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES: CUSTOM_PROVIDER_MODEL_CAPABILITIES,
-          ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES: CUSTOM_PROVIDER_MODEL_CAPABILITIES,
+          ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES: customProviderCapabilities,
+          ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES: customProviderCapabilities,
+          ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES: customProviderCapabilities,
         }
       : {}
 

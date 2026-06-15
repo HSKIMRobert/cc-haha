@@ -398,12 +398,21 @@ export class ConversationService {
 
     session.startupPending = false
 
-    if (shouldReplacePlaceholder || !launchInfo) {
+    const shouldPersistRuntimeMetadata =
+      options?.providerId !== undefined ||
+      !!options?.model ||
+      !!options?.effort
+    if (shouldReplacePlaceholder || !launchInfo || shouldPersistRuntimeMetadata) {
       await sessionService.appendSessionMetadata(sessionId, {
         workDir: launchWorkDir,
         customTitle: launchInfo?.customTitle ?? null,
         repository: launchRepository,
         permissionMode: options?.permissionMode || launchInfo?.permissionMode,
+        ...(options?.providerId !== undefined
+          ? { runtimeProviderId: options.providerId }
+          : {}),
+        ...(options?.model ? { runtimeModelId: options.model } : {}),
+        ...(options?.effort ? { effortLevel: options.effort } : {}),
       })
     }
 

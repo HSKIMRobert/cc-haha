@@ -230,6 +230,28 @@ describe('ProviderService', () => {
       )
     })
 
+    test('Xiaomi MiMo custom providers declare thinking without effort passthrough', async () => {
+      const svc = new ProviderService()
+      const provider = await svc.addProvider(sampleInput({
+        name: 'Xiaomi MiMo Custom',
+        baseUrl: 'https://token-plan-sgp.xiaomimimo.com/anthropic',
+        models: {
+          main: 'mimo-v2.5-pro[1m]',
+          haiku: 'mimo-v2.5-pro[1m]',
+          sonnet: 'mimo-v2.5-pro[1m]',
+          opus: 'mimo-v2.5-pro[1m]',
+        },
+      }))
+
+      await svc.activateProvider(provider.id)
+
+      const settings = await readSettings()
+      const env = settings.env as Record<string, string>
+      expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES).toBe('thinking')
+      expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES).toBe('thinking')
+      expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES).toBe('thinking')
+    })
+
     test('DeepSeek preset follows the global thinking toggle instead of forcing disabled thinking', async () => {
       const svc = new ProviderService()
       const provider = await svc.addProvider(sampleInput({

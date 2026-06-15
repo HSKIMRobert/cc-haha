@@ -1367,6 +1367,7 @@ export class SessionService {
   ): Promise<number | undefined> {
     const launchInfo = await this.getSessionLaunchInfo(sessionId).catch(() => null)
     const providerIds: string[] = []
+    const allowSavedProviderInference = launchInfo?.runtimeProviderId === undefined
 
     if (typeof launchInfo?.runtimeProviderId === 'string') {
       providerIds.push(launchInfo.runtimeProviderId)
@@ -1389,7 +1390,45 @@ export class SessionService {
       }
     }
 
+    if (allowSavedProviderInference) {
+      return this.getUniqueSavedProviderContextWindow(model)
+    }
+
     return undefined
+  }
+
+  private async getUniqueSavedProviderContextWindow(model: string): Promise<number | undefined> {
+    const { providers } = await this.providerService.listProviders().catch(() => ({ providers: [] }))
+    const matches: number[] = []
+
+    for (const provider of providers) {
+      const env = await this.providerService.getProviderRuntimeEnv(provider.id).catch(() => null)
+      const contextWindow = getModelContextWindowFromEnvValue(
+        model,
+        env?.[MODEL_CONTEXT_WINDOWS_ENV_KEY],
+      )
+      if (contextWindow !== undefined) {
+        matches.push(contextWindow)
+      }
+    }
+
+    if (matches.length === 0) {
+      return undefined
+    }
+
+    const uniqueWindows = new Set(matches)
+    if (uniqueWindows.size !== 1) {
+      return undefined
+    }
+
+    const [contextWindow] = uniqueWindows
+    if (
+      contextWindow > MODEL_CONTEXT_WINDOW_DEFAULT &&
+      is1mContextDisabled()
+    ) {
+      return MODEL_CONTEXT_WINDOW_DEFAULT
+    }
+    return contextWindow
   }
 
   private async getTranscriptContextWindow(sessionId: string, model: string): Promise<number> {
