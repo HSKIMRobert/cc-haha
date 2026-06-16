@@ -106,12 +106,19 @@ describe('release desktop workflow', () => {
     const gatekeeperStep = workflow.match(
       /- name: Verify macOS launch policy[\s\S]*?(?:\n\s{6}- name:|$)/,
     )?.[0]
+    const notarizationWarningStep = workflow.match(
+      /- name: Warn macOS notarization skipped[\s\S]*?(?:\n\s{6}- name:|$)/,
+    )?.[0]
     const unsignedWarningStep = workflow.match(
       /- name: Warn unsigned macOS launch policy skipped[\s\S]*?(?:\n\s{6}- name:|$)/,
     )?.[0]
 
-    expect(gatekeeperStep).toContain("if: matrix.smoke_platform == 'macos' && needs.signing-preflight.outputs.macos_signed == 'true'")
+    expect(workflow).toContain('notarize_macos:')
+    expect(workflow).toContain("description: 'Notarize macOS artifacts'")
+    expect(gatekeeperStep).toContain("if: matrix.smoke_platform == 'macos' && needs.signing-preflight.outputs.macos_signed == 'true' && (github.event_name != 'workflow_dispatch' || inputs.notarize_macos == true)")
     expect(gatekeeperStep).toContain('bun run test:package-smoke --platform macos --package-kind release --artifacts-dir desktop/build-artifacts/electron --require-macos-gatekeeper')
+    expect(notarizationWarningStep).toContain("if: matrix.smoke_platform == 'macos' && needs.signing-preflight.outputs.macos_signed == 'true' && github.event_name == 'workflow_dispatch' && inputs.notarize_macos == false")
+    expect(notarizationWarningStep).toContain('Developer ID signed but not notarized')
     expect(unsignedWarningStep).toContain("if: matrix.smoke_platform == 'macos' && needs.signing-preflight.outputs.macos_signed != 'true'")
     expect(unsignedWarningStep).toContain('install-macos-unsigned.sh')
     expect(workflow.indexOf('Verify macOS launch policy')).toBeLessThan(workflow.indexOf('Upload release artifacts for final publish'))
@@ -128,14 +135,20 @@ describe('release desktop workflow', () => {
     expect(signedBuildStep).toContain('APPLE_ID: ${{ secrets.APPLE_ID }}')
     expect(signedBuildStep).toContain('APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}')
     expect(signedBuildStep).toContain('APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}')
+    expect(signedBuildStep).toContain("MACOS_NOTARIZE: ${{ github.event_name != 'workflow_dispatch' || inputs.notarize_macos }}")
     expect(signedBuildStep).not.toContain('CSC_IDENTITY_AUTO_DISCOVERY')
     expect(signedBuildStep).toContain('timeout-minutes: 80')
     expect(signedBuildStep).toContain("DEBUG: 'electron-builder,electron-osx-sign,electron-notarize*'")
     expect(signedBuildStep).toContain('macOS signing diagnostics')
     expect(signedBuildStep).toContain('xcrun --find notarytool')
     expect(signedBuildStep).toContain('security find-identity -v -p codesigning')
+    expect(signedBuildStep).toContain('macOS notarization requested: ${MACOS_NOTARIZE}')
     expect(signedBuildStep).toContain('max_attempts=2')
     expect(signedBuildStep).toContain('build_timeout_seconds=2100')
+    expect(signedBuildStep).toContain('max_attempts=1')
+    expect(signedBuildStep).toContain('build_timeout_seconds=900')
+    expect(signedBuildStep).toContain('-c.mac.notarize=false')
+    expect(signedBuildStep).toContain('macOS notarization is disabled for this draft run')
     expect(signedBuildStep).toContain('run_signed_electron_builder')
     expect(signedBuildStep).toContain('Signed electron-builder timed out')
     expect(signedBuildStep).toContain('pkill -TERM -P "$build_pid"')
@@ -147,7 +160,7 @@ describe('release desktop workflow', () => {
     expect(signedBuildStep).toContain('Starting signed electron-builder attempt')
     expect(signedBuildStep).toContain('Finished signed electron-builder attempt')
     expect(signedBuildStep).toContain('retrying after 120 seconds')
-    expect(signedBuildStep).toContain(electronBuilderCli)
+    expect(signedBuildStep).toContain('node ./node_modules/electron-builder/out/cli/cli.js "${builder_args[@]}"')
 
     expect(unsignedBuildStep).toContain("if: matrix.smoke_platform != 'macos' || needs.signing-preflight.outputs.macos_signed != 'true'")
     expect(unsignedBuildStep).toContain("CSC_IDENTITY_AUTO_DISCOVERY: 'false'")
