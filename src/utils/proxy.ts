@@ -128,6 +128,11 @@ export function shouldBypassProxy(
   }
 }
 
+function shouldBypassProxyForTarget(targetUrl: string | URL | undefined | null): boolean {
+  if (!targetUrl) return false
+  return shouldBypassProxy(String(targetUrl))
+}
+
 /**
  * Create an HttpsProxyAgent with optional mTLS configuration
  * Skips local DNS resolution to let the proxy handle it
@@ -285,7 +290,7 @@ export function getWebSocketProxyUrl(url: string): string | undefined {
  *   requests get misrouted to api.anthropic.com. Only the Anthropic SDK client
  *   should pass `true` here.
  */
-export function getProxyFetchOptions(opts?: { forAnthropicAPI?: boolean; proxyUrl?: string | null }): {
+export function getProxyFetchOptions(opts?: { forAnthropicAPI?: boolean; proxyUrl?: string | null; targetUrl?: string | URL | null }): {
   tls?: TLSConfig
   dispatcher?: undici.Dispatcher
   proxy?: string
@@ -307,6 +312,10 @@ export function getProxyFetchOptions(opts?: { forAnthropicAPI?: boolean; proxyUr
   const proxyUrl = opts?.proxyUrl !== undefined
     ? opts.proxyUrl || undefined
     : getProxyUrl()
+
+  if (proxyUrl && shouldBypassProxyForTarget(opts?.targetUrl)) {
+    return { ...base, ...getTLSFetchOptions() }
+  }
 
   // If we have a proxy, use the proxy agent (which includes mTLS config)
   if (proxyUrl) {

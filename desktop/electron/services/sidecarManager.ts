@@ -34,6 +34,7 @@ const PROXY_ENV_KEYS = [
   'http_proxy',
   'https_proxy',
 ] as const
+const LOOPBACK_NO_PROXY_ENTRIES = ['localhost', '127.0.0.1', '::1'] as const
 
 export function resolveHostTriple(platform = process.platform, arch = process.arch): string {
   if (platform === 'darwin' && arch === 'arm64') return 'aarch64-apple-darwin'
@@ -248,7 +249,12 @@ export function mergeProxyEnv(
   proxyUrl: string | undefined,
 ): NodeJS.ProcessEnv {
   if (!proxyUrl) return baseEnv
-  if (PROXY_ENV_KEYS.some(key => baseEnv[key])) return baseEnv
+  if (PROXY_ENV_KEYS.some(key => baseEnv[key])) {
+    const noProxy = mergeLoopbackNoProxy(baseEnv.no_proxy || baseEnv.NO_PROXY)
+    return { ...baseEnv, NO_PROXY: noProxy, no_proxy: noProxy }
+  }
+
+  const noProxy = mergeLoopbackNoProxy(baseEnv.no_proxy || baseEnv.NO_PROXY)
 
   return {
     ...baseEnv,
@@ -256,8 +262,23 @@ export function mergeProxyEnv(
     HTTPS_PROXY: proxyUrl,
     http_proxy: proxyUrl,
     https_proxy: proxyUrl,
-    NO_PROXY: baseEnv.NO_PROXY || baseEnv.no_proxy || 'localhost,127.0.0.1,::1',
+    NO_PROXY: noProxy,
+    no_proxy: noProxy,
   }
+}
+
+function mergeLoopbackNoProxy(existing: string | undefined): string {
+  const entries = (existing ?? '')
+    .split(/[,\s]+/)
+    .map(entry => entry.trim())
+    .filter(Boolean)
+  const lowerEntries = new Set(entries.map(entry => entry.toLowerCase()))
+
+  for (const entry of LOOPBACK_NO_PROXY_ENTRIES) {
+    if (!lowerEntries.has(entry.toLowerCase())) entries.push(entry)
+  }
+
+  return entries.join(',')
 }
 
 // The agent's PowerShellTool reads this env var to honor the user's chosen shell

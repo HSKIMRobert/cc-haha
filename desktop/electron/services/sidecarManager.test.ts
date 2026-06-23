@@ -134,15 +134,19 @@ describe('Electron sidecar manager', () => {
     expect(env.http_proxy).toBe('http://127.0.0.1:7897')
     expect(env.https_proxy).toBe('http://127.0.0.1:7897')
     expect(env.NO_PROXY).toContain('127.0.0.1')
+    expect(env.no_proxy).toContain('localhost')
   })
 
-  it('does not override explicit sidecar proxy environment', () => {
+  it('does not override explicit sidecar proxy environment and still preserves loopback bypasses', () => {
     const env = mergeProxyEnv(
-      { HTTPS_PROXY: 'http://manual.example:8080' },
+      { HTTPS_PROXY: 'http://manual.example:8080', NO_PROXY: '.corp.local' },
       'http://system.example:8080',
     )
 
-    expect(env).toEqual({ HTTPS_PROXY: 'http://manual.example:8080' })
+    expect(env.HTTPS_PROXY).toBe('http://manual.example:8080')
+    expect(env.HTTP_PROXY).toBeUndefined()
+    expect(env.NO_PROXY).toBe('.corp.local,localhost,127.0.0.1,::1')
+    expect(env.no_proxy).toBe('.corp.local,localhost,127.0.0.1,::1')
   })
 
   it('keeps startup logs bounded', () => {
