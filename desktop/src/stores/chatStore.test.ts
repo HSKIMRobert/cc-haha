@@ -3437,6 +3437,64 @@ describe('chatStore history mapping', () => {
     ]))
   })
 
+  it('suppresses assistant output for a task-notification-only follow-up turn', () => {
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          chatState: 'idle',
+          elapsedSeconds: 718,
+        }),
+      },
+    })
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'task_notification',
+      data: {
+        task_id: 'butp7dybq',
+        tool_use_id: 'toolu_bdrk_01SvH8CKoRoBcv1T1Gr9jWT3',
+        status: 'completed',
+        summary: 'Background command "1000 客户端压测并采样服务端内存" completed (exit code 0)',
+        output_file: '/tmp/butp7dybq.output',
+      },
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'thinking',
+      text: "The earlier monitoring command has already been handled by subsequent work, so there's nothing more to add here.",
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'content_start',
+      blockType: 'text',
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'content_delta',
+      text: '那是早前的监控命令收尾通知，已被后续的多核压测取代，无需处理。交付已全部完成并验证通过。',
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'message_complete',
+      usage: { input_tokens: 12, output_tokens: 34 },
+    })
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.messages).toMatchObject([
+      {
+        type: 'background_task',
+        task: {
+          taskId: 'butp7dybq',
+          toolUseId: 'toolu_bdrk_01SvH8CKoRoBcv1T1Gr9jWT3',
+          status: 'completed',
+        },
+      },
+    ])
+    expect(session?.messages).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'thinking' }),
+      expect.objectContaining({ type: 'assistant_text' }),
+      expect.objectContaining({ type: 'system', content: 'Completed in 11m 58s' }),
+    ]))
+    expect(session?.chatState).toBe('idle')
+    expect(updateTabStatusMock).toHaveBeenLastCalledWith(TEST_SESSION_ID, 'idle')
+  })
+
   it('flushes a delayed completion before a new user turn while background tasks keep running', () => {
     useChatStore.setState({
       sessions: {
