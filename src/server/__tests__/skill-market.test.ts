@@ -70,6 +70,32 @@ describe('skill market source normalization', () => {
     })
   })
 
+  it('does not use clean ClawHub scanner summaries for blocked scans', () => {
+    expect(normalizeClawHubScan({
+      status: 'malicious',
+      scanners: {
+        metadata: { status: 'clean', summary: 'No dangerous patterns detected.' },
+      },
+    })).toEqual({
+      trustState: 'blocked',
+      trustSummary: undefined,
+      packageSha256: undefined,
+    })
+  })
+
+  it('does not use clean ClawHub scanner summaries for warning scans', () => {
+    expect(normalizeClawHubScan({
+      status: 'suspicious',
+      scanners: {
+        metadata: { status: 'clean', summary: 'No dangerous patterns detected.' },
+      },
+    })).toEqual({
+      trustState: 'warning',
+      trustSummary: undefined,
+      packageSha256: undefined,
+    })
+  })
+
   it('normalizes SkillHub list items as fallback candidates with Chinese summary', () => {
     const result = normalizeSkillHubList(SKILLHUB_TOP_SKILLS_RESPONSE)
 
