@@ -478,6 +478,130 @@ describe('skill market service source selection', () => {
     expect(result.message).toContain('network down')
   })
 
+  it('caches catalog results without caching installed state', async () => {
+    const fetchCalls: string[] = []
+    let installedSkillNames = new Set<string>()
+    const service = createSkillMarketService({
+      fetchImpl: async (url) => {
+        fetchCalls.push(String(url))
+        return Response.json(CLAWHUB_TOP_SKILLS_RESPONSE)
+      },
+      installedSkillNames: async () => installedSkillNames,
+      now: () => 1_000,
+    })
+
+    const first = await service.listSkills({ source: 'clawhub', limit: 12, query: 'vetter' })
+    installedSkillNames = new Set(['skill-vetter'])
+    const second = await service.listSkills({ source: 'clawhub', limit: 12, query: 'vetter' })
+
+    expect(fetchCalls).toHaveLength(1)
+    expect(first.items[0]).toMatchObject({ slug: 'skill-vetter', installed: false })
+    expect(second.items[0]).toMatchObject({ slug: 'skill-vetter', installed: true })
+  })
+
+  it('refreshes cached catalog results after the catalog TTL expires', async () => {
+    const fetchCalls: string[] = []
+    let now = 10_000
+    const service = createSkillMarketService({
+      fetchImpl: async (url) => {
+        fetchCalls.push(String(url))
+        return Response.json(CLAWHUB_TOP_SKILLS_RESPONSE)
+      },
+      installedSkillNames: async () => new Set(),
+      now: () => now,
+    })
+
+    await service.listSkills({ source: 'clawhub', limit: 12, query: 'vetter' })
+    await service.listSkills({ source: 'clawhub', limit: 12, query: 'vetter' })
+    expect(fetchCalls).toHaveLength(1)
+    now += 5 * 60 * 1_000 + 1
+    await service.listSkills({ source: 'clawhub', limit: 12, query: 'vetter' })
+
+    expect(fetchCalls).toHaveLength(2)
+    expect(fetchCalls[0]).toBe(fetchCalls[1])
+  })
+
+  it('uses the failure cache to skip repeated ClawHub request failures in auto mode', async () => {
+    const fetchCalls: string[] = []
+    let now = 20_000
+    let clawHubRequests = 0
+    const service = createSkillMarketService({
+      fetchImpl: async (url) => {
+        const urlString = String(url)
+        fetchCalls.push(urlString)
+        if (urlString.startsWith('https://clawhub.ai/')) {
+          clawHubRequests += 1
+          if (clawHubRequests === 1) {
+            return new Response('temporarily unavailable', { status: 503 })
+          }
+          return Response.json(CLAWHUB_TOP_SKILLS_RESPONSE)
+        }
+        return Response.json(SKILLHUB_TOP_SKILLS_RESPONSE)
+      },
+      installedSkillNames: async () => new Set(),
+      now: () => now,
+    })
+
+    const first = await service.listSkills({ source: 'auto', limit: 10, query: 'vetter' })
+    const requestsAfterFirst = fetchCalls.length
+    now += 30_000
+    const second = await service.listSkills({ source: 'auto', limit: 10, query: 'vetter' })
+    const requestsAfterSecond = fetchCalls.length
+    now += 30_001
+    const third = await service.listSkills({ source: 'auto', limit: 10, query: 'vetter' })
+
+    expect(fetchCalls.slice(0, requestsAfterFirst)).toEqual([
+      expect.stringContaining('https://clawhub.ai/api/v1/skills'),
+      expect.stringContaining('https://api.skillhub.cn/api/skills'),
+    ])
+    expect(fetchCalls.slice(requestsAfterFirst, requestsAfterSecond)).not.toContainEqual(
+      expect.stringContaining('https://clawhub.ai/'),
+    )
+    expect(first.sourceStatus).toBe('fallback')
+    expect(second.source).toBe('skillhub')
+    expect(second.sourceStatus).toBe('fallback')
+    expect(second.message).toContain('ClawHub unavailable')
+    expect(third).toMatchObject({ source: 'clawhub', sourceStatus: 'ok' })
+    expect(clawHubRequests).toBe(2)
+  })
+
+  it('does not fall back when ClawHub returns 2xx but JSON parsing fails', async () => {
+    const fetchCalls: string[] = []
+    const service = createSkillMarketService({
+      fetchImpl: async (url) => {
+        fetchCalls.push(String(url))
+        if (String(url).startsWith('https://clawhub.ai/')) {
+          return new Response('{not-json', { status: 200 })
+        }
+        return Response.json(SKILLHUB_TOP_SKILLS_RESPONSE)
+      },
+      installedSkillNames: async () => new Set(),
+    })
+
+    await expect(service.listSkills({ source: 'auto' })).rejects.toThrow()
+
+    expect(fetchCalls).toHaveLength(1)
+    expect(fetchCalls[0]).toStartWith('https://clawhub.ai/api/v1/skills')
+  })
+
+  it('does not fall back when installed skill resolution fails', async () => {
+    const fetchCalls: string[] = []
+    const service = createSkillMarketService({
+      fetchImpl: async (url) => {
+        fetchCalls.push(String(url))
+        return Response.json(CLAWHUB_TOP_SKILLS_RESPONSE)
+      },
+      installedSkillNames: async () => {
+        throw new Error('installed provider unavailable')
+      },
+    })
+
+    await expect(service.listSkills({ source: 'auto' })).rejects.toThrow('installed provider unavailable')
+
+    expect(fetchCalls).toHaveLength(1)
+    expect(fetchCalls[0]).toStartWith('https://clawhub.ai/api/v1/skills')
+  })
+
   it("does not fallback to SkillHub when source is 'clawhub'", async () => {
     const fetchCalls: string[] = []
     const service = createSkillMarketService({

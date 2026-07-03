@@ -18,6 +18,7 @@ type InstalledSkillNamesProvider = Set<string> | (() => Set<string> | Promise<Se
 export type SkillMarketServiceOptions = {
   fetchImpl?: FetchImpl
   installedSkillNames?: InstalledSkillNamesProvider
+  now?: () => number
 }
 
 export type SkillMarketService = {
@@ -29,10 +30,33 @@ const CLAWHUB_SKILLS_URL = 'https://clawhub.ai/api/v1/skills'
 const SKILLHUB_SKILLS_URL = 'https://api.skillhub.cn/api/skills'
 const DEFAULT_LIMIT = 24
 const MAX_LIMIT = 100
+const CATALOG_CACHE_TTL_MS = 5 * 60 * 1_000
+const FAILURE_CACHE_TTL_MS = 60 * 1_000
+
+type CatalogCacheEntry = {
+  expiresAt: number
+  result: SkillMarketListResult
+}
+
+type FailureCacheEntry = {
+  expiresAt: number
+  message: string
+}
+
+class SkillMarketRequestError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message)
+    this.name = 'SkillMarketRequestError'
+    this.cause = options?.cause
+  }
+}
 
 export function createSkillMarketService(options: SkillMarketServiceOptions = {}): SkillMarketService {
   const fetchImpl = options.fetchImpl ?? fetch
   const installedSkillNames = options.installedSkillNames
+  const now = options.now ?? Date.now
+  const catalogCache = new Map<string, CatalogCacheEntry>()
+  const failureCache = new Map<string, FailureCacheEntry>()
 
   async function listSkills(params: SkillMarketListParams = {}): Promise<SkillMarketListResult> {
     const source = params.source ?? 'auto'
@@ -49,46 +73,99 @@ export function createSkillMarketService(options: SkillMarketServiceOptions = {}
       throw new Error(`Unsupported skill market source: ${source}`)
     }
 
+    const clawHubFailure = recentFailure(clawHubCatalogCacheKey(params))
+    if (clawHubFailure) {
+      const fallback = await listSkillHub(params)
+      return withInstalled({
+        ...fallback,
+        sourceStatus: 'fallback',
+        message: `ClawHub unavailable: recent request failure (${clawHubFailure.message})`,
+      })
+    }
+
+    let clawHub: SkillMarketListResult
     try {
-      return withInstalled(await listClawHub(params))
+      clawHub = await listClawHub(params)
     } catch (error) {
-      const fallback = await listSkillHub(params, 'fallback')
+      if (!(error instanceof SkillMarketRequestError)) {
+        throw error
+      }
+      const fallback = await listSkillHub(params)
       return withInstalled({
         ...fallback,
         sourceStatus: 'fallback',
         message: `ClawHub unavailable: ${errorMessage(error)}`,
       })
     }
+    return withInstalled(clawHub)
   }
 
   async function listClawHub(params: SkillMarketListParams): Promise<SkillMarketListResult> {
-    const url = new URL(CLAWHUB_SKILLS_URL)
-    url.searchParams.set('sort', clawHubSort(params.sort))
-    url.searchParams.set('nonSuspiciousOnly', 'true')
-    url.searchParams.set('limit', String(limitFor(params.limit)))
-    addOptionalParam(url, 'query', params.query)
-    addOptionalParam(url, 'cursor', params.cursor)
-
-    const payload = await requestJson(fetchImpl, url, 'ClawHub')
-    return normalizeClawHubList(payload)
+    const url = clawHubUrlFor(params)
+    const cacheKey = catalogCacheKey('clawhub', url)
+    try {
+      const result = await cachedCatalog(cacheKey, async () => {
+        const payload = await requestJson(fetchImpl, url, 'ClawHub')
+        return normalizeClawHubList(payload)
+      })
+      failureCache.delete(cacheKey)
+      return result
+    } catch (error) {
+      if (error instanceof SkillMarketRequestError) {
+        failureCache.set(cacheKey, {
+          expiresAt: now() + FAILURE_CACHE_TTL_MS,
+          message: errorMessage(error),
+        })
+      }
+      throw error
+    }
   }
 
-  async function listSkillHub(
-    params: SkillMarketListParams,
-    sourceStatus: SkillMarketListResult['sourceStatus'],
-  ): Promise<SkillMarketListResult> {
-    const url = new URL(SKILLHUB_SKILLS_URL)
-    url.searchParams.set('sortBy', skillHubSort(params.sort))
-    url.searchParams.set('order', 'desc')
-    url.searchParams.set('limit', String(limitFor(params.limit)))
-    addOptionalParam(url, 'query', params.query)
-    addOptionalParam(url, 'cursor', params.cursor)
+  async function listSkillHub(params: SkillMarketListParams): Promise<SkillMarketListResult> {
+    const url = skillHubUrlFor(params)
+    return cachedCatalog(catalogCacheKey('skillhub', url), async () => {
+      const payload = await requestJson(fetchImpl, url, 'SkillHub')
+      return {
+        ...normalizeSkillHubList(payload),
+        sourceStatus: 'ok',
+      }
+    })
+  }
 
-    const payload = await requestJson(fetchImpl, url, 'SkillHub')
-    return {
-      ...normalizeSkillHubList(payload),
-      sourceStatus,
+  async function cachedCatalog(
+    cacheKey: string,
+    loader: () => Promise<SkillMarketListResult>,
+  ): Promise<SkillMarketListResult> {
+    const cached = catalogCache.get(cacheKey)
+    const currentTime = now()
+    if (cached && cached.expiresAt > currentTime) {
+      return {
+        ...cached.result,
+        sourceStatus: 'cached',
+      }
     }
+    if (cached) {
+      catalogCache.delete(cacheKey)
+    }
+
+    const result = await loader()
+    catalogCache.set(cacheKey, {
+      expiresAt: now() + CATALOG_CACHE_TTL_MS,
+      result,
+    })
+    return result
+  }
+
+  function recentFailure(cacheKey: string): FailureCacheEntry | undefined {
+    const cached = failureCache.get(cacheKey)
+    if (!cached) {
+      return undefined
+    }
+    if (cached.expiresAt > now()) {
+      return cached
+    }
+    failureCache.delete(cacheKey)
+    return undefined
   }
 
   async function withInstalled(result: SkillMarketListResult): Promise<SkillMarketListResult> {
@@ -108,16 +185,44 @@ export function createSkillMarketService(options: SkillMarketServiceOptions = {}
   }
 }
 
+function clawHubUrlFor(params: SkillMarketListParams): URL {
+  const url = new URL(CLAWHUB_SKILLS_URL)
+  url.searchParams.set('sort', clawHubSort(params.sort))
+  url.searchParams.set('nonSuspiciousOnly', 'true')
+  url.searchParams.set('limit', String(limitFor(params.limit)))
+  addOptionalParam(url, 'query', params.query)
+  addOptionalParam(url, 'cursor', params.cursor)
+  return url
+}
+
+function skillHubUrlFor(params: SkillMarketListParams): URL {
+  const url = new URL(SKILLHUB_SKILLS_URL)
+  url.searchParams.set('sortBy', skillHubSort(params.sort))
+  url.searchParams.set('order', 'desc')
+  url.searchParams.set('limit', String(limitFor(params.limit)))
+  addOptionalParam(url, 'query', params.query)
+  addOptionalParam(url, 'cursor', params.cursor)
+  return url
+}
+
+function clawHubCatalogCacheKey(params: SkillMarketListParams): string {
+  return catalogCacheKey('clawhub', clawHubUrlFor(params))
+}
+
+function catalogCacheKey(source: 'clawhub' | 'skillhub', url: URL): string {
+  return `${source}:${url.toString()}`
+}
+
 async function requestJson(fetchImpl: FetchImpl, url: URL, sourceName: string): Promise<unknown> {
   let response: Response
   try {
     response = await fetchImpl(url)
   } catch (error) {
-    throw new Error(`${sourceName} request failed: ${errorMessage(error)}`)
+    throw new SkillMarketRequestError(`${sourceName} request failed: ${errorMessage(error)}`, { cause: error })
   }
 
   if (!response.ok) {
-    throw new Error(`${sourceName} request failed with status ${response.status}`)
+    throw new SkillMarketRequestError(`${sourceName} request failed with status ${response.status}`)
   }
 
   return response.json()
