@@ -1,7 +1,10 @@
-import { normalizeClawHubList } from './clawhubAdapter.js'
+import { normalizeClawHubDetail, normalizeClawHubList, normalizeClawHubVersionFiles } from './clawhubAdapter.js'
+import { analyzeSkillRisk } from './risk.js'
 import { normalizeSkillHubList } from './skillhubAdapter.js'
 import type {
   SkillMarketDetail,
+  SkillMarketFile,
+  SkillMarketFilePreview,
   SkillMarketItem,
   SkillMarketListResult,
   SkillMarketSource,
@@ -39,10 +42,41 @@ export type SkillMarketService = {
 
 const CLAWHUB_SKILLS_URL = 'https://clawhub.ai/api/v1/skills'
 const SKILLHUB_SKILLS_URL = 'https://api.skillhub.cn/api/skills'
-const DEFAULT_LIMIT = 24
+const DEFAULT_LIMIT = 100
 const MAX_LIMIT = 100
 const CATALOG_CACHE_TTL_MS = 5 * 60 * 1_000
 const FAILURE_CACHE_TTL_MS = 60 * 1_000
+const FILE_PREVIEW_LIMIT = 5
+const FILE_PREVIEW_MAX_BYTES = 96 * 1024
+const FILE_PREVIEW_MAX_CHARS = 24_000
+const TEXT_FILE_EXTENSIONS = new Set([
+  '.md',
+  '.mdx',
+  '.txt',
+  '.json',
+  '.jsonl',
+  '.yaml',
+  '.yml',
+  '.toml',
+  '.py',
+  '.js',
+  '.jsx',
+  '.ts',
+  '.tsx',
+  '.sh',
+  '.bash',
+  '.zsh',
+  '.fish',
+  '.ps1',
+  '.rb',
+  '.go',
+  '.rs',
+  '.java',
+  '.kt',
+  '.swift',
+  '.css',
+  '.html',
+])
 type CatalogCacheEntry = {
   expiresAt: number
   result: SkillMarketListResult
@@ -199,6 +233,17 @@ export function createSkillMarketService(options: SkillMarketServiceOptions = {}
       return null
     }
 
+    if (params.source === 'clawhub') {
+      const installed = await resolveInstalledSkillNames(installedSkillNames)
+      try {
+        return await fetchClawHubDetail(slug, installed.has(slug))
+      } catch (error) {
+        if (!(error instanceof SkillMarketRequestError)) {
+          throw error
+        }
+      }
+    }
+
     const list = await listSkills({
       source: params.source,
       query: slug,
@@ -209,6 +254,72 @@ export function createSkillMarketService(options: SkillMarketServiceOptions = {}
       return null
     }
     return detailFromListItem(item)
+  }
+
+  async function fetchClawHubDetail(slug: string, installed: boolean): Promise<SkillMarketDetail | null> {
+    const detailPayload = await requestJson(fetchImpl, clawHubDetailUrl(slug), 'ClawHub detail')
+    const scanPayload = await requestJson(fetchImpl, clawHubScanUrl(slug), 'ClawHub scan')
+    const detail = normalizeClawHubDetail(detailPayload, scanPayload, { installed })
+    if (!detail) {
+      return null
+    }
+
+    const versionFiles = detail.version
+      ? await fetchClawHubVersionFiles(slug, detail.version)
+      : []
+    const files = versionFiles.length > 0 ? versionFiles : detail.files
+    const filePreviews = await fetchClawHubFilePreviews(slug, detail.version, files)
+    const entryPreview = filePreviews.find((preview) => preview.path === 'SKILL.md')?.content ?? detail.entryPreview
+
+    return {
+      ...detail,
+      files,
+      filePreviews,
+      entryPreview,
+      previewUnavailableReason: previewUnavailableReason(filePreviews, files, detail.entryPreview),
+      riskLabels: analyzeSkillRisk({
+        entryContent: entryPreview,
+        files,
+        requiresApiKey: detail.requiresApiKey,
+      }),
+    }
+  }
+
+  async function fetchClawHubVersionFiles(slug: string, version: string): Promise<SkillMarketFile[]> {
+    try {
+      const payload = await requestJson(fetchImpl, clawHubVersionUrl(slug, version), 'ClawHub version')
+      return normalizeClawHubVersionFiles(payload)
+    } catch (error) {
+      if (error instanceof SkillMarketRequestError) {
+        return []
+      }
+      throw error
+    }
+  }
+
+  async function fetchClawHubFilePreviews(
+    slug: string,
+    version: string | undefined,
+    files: SkillMarketFile[],
+  ): Promise<SkillMarketFilePreview[]> {
+    const previews: SkillMarketFilePreview[] = []
+    for (const file of previewCandidateFiles(files)) {
+      try {
+        const content = await requestText(fetchImpl, clawHubFileUrl(slug, file.path, version), 'ClawHub file')
+        const preview = buildTextPreview(file, content)
+        if (preview) {
+          previews.push(preview)
+        }
+      } catch (error) {
+        if (!(error instanceof SkillMarketRequestError)) {
+          throw error
+        }
+      }
+      if (previews.length >= FILE_PREVIEW_LIMIT) {
+        break
+      }
+    }
+    return previews
   }
 
   return {
@@ -222,6 +333,9 @@ function detailFromListItem(item: SkillMarketItem): SkillMarketDetail {
   return {
     ...item,
     files: [],
+    previewUnavailableReason: item.source === 'skillhub'
+      ? 'SkillHub does not expose a safe raw file preview endpoint yet.'
+      : 'Marketplace detail did not include enough package metadata for file preview.',
     riskLabels: [],
     installEligibility: installEligibilityFromListItem(item),
   }
@@ -261,6 +375,27 @@ function clawHubUrlFor(params: SkillMarketListParams): URL {
   return url
 }
 
+function clawHubDetailUrl(slug: string): URL {
+  return new URL(`${CLAWHUB_SKILLS_URL}/${encodeURIComponent(slug)}`)
+}
+
+function clawHubScanUrl(slug: string): URL {
+  return new URL(`${CLAWHUB_SKILLS_URL}/${encodeURIComponent(slug)}/scan`)
+}
+
+function clawHubVersionUrl(slug: string, version: string): URL {
+  return new URL(`${CLAWHUB_SKILLS_URL}/${encodeURIComponent(slug)}/versions/${encodeURIComponent(version)}`)
+}
+
+function clawHubFileUrl(slug: string, filePath: string, version?: string): URL {
+  const url = new URL(`${CLAWHUB_SKILLS_URL}/${encodeURIComponent(slug)}/file`)
+  url.searchParams.set('path', filePath)
+  if (version) {
+    url.searchParams.set('version', version)
+  }
+  return url
+}
+
 function skillHubUrlFor(params: SkillMarketListParams): URL {
   const url = new URL(SKILLHUB_SKILLS_URL)
   url.searchParams.set('sortBy', skillHubSort(params.sort))
@@ -292,6 +427,143 @@ async function requestJson(fetchImpl: FetchImpl, url: URL, sourceName: string): 
   }
 
   return response.json()
+}
+
+async function requestText(fetchImpl: FetchImpl, url: URL, sourceName: string): Promise<string> {
+  let response: Response
+  try {
+    response = await fetchImpl(url, {
+      headers: {
+        accept: 'text/plain, text/markdown;q=0.9, */*;q=0.1',
+      },
+    })
+  } catch (error) {
+    throw new SkillMarketRequestError(`${sourceName} request failed: ${errorMessage(error)}`, { cause: error })
+  }
+
+  if (!response.ok) {
+    throw new SkillMarketRequestError(`${sourceName} request failed with status ${response.status}`)
+  }
+
+  return response.text()
+}
+
+function previewCandidateFiles(files: SkillMarketFile[]): SkillMarketFile[] {
+  return files
+    .filter(isPreviewableTextFile)
+    .sort((a, b) => previewPriority(a) - previewPriority(b) || a.path.localeCompare(b.path))
+    .slice(0, FILE_PREVIEW_LIMIT)
+}
+
+function isPreviewableTextFile(file: SkillMarketFile): boolean {
+  const normalizedPath = file.path.replace(/\\/g, '/')
+  if (!normalizedPath || normalizedPath.includes('\0') || normalizedPath.endsWith('/')) {
+    return false
+  }
+  if (typeof file.size === 'number' && file.size > FILE_PREVIEW_MAX_BYTES) {
+    return false
+  }
+  const contentType = file.contentType?.toLowerCase()
+  if (contentType?.startsWith('text/')) {
+    return true
+  }
+  if (contentType === 'application/json' || contentType === 'application/x-sh') {
+    return true
+  }
+  return TEXT_FILE_EXTENSIONS.has(fileExtension(normalizedPath))
+}
+
+function previewPriority(file: SkillMarketFile): number {
+  const normalizedPath = file.path.replace(/\\/g, '/')
+  const lowerPath = normalizedPath.toLowerCase()
+  if (lowerPath === 'skill.md') return 0
+  if (lowerPath.endsWith('/skill.md')) return 1
+  if (lowerPath.endsWith('.md') || lowerPath.endsWith('.mdx')) return 2
+  if (lowerPath.startsWith('scripts/')) return 3
+  if (lowerPath.endsWith('.py') || lowerPath.endsWith('.ts') || lowerPath.endsWith('.js')) return 4
+  return 5
+}
+
+function buildTextPreview(file: SkillMarketFile, rawContent: string): SkillMarketFilePreview | null {
+  if (!isLikelyText(rawContent)) {
+    return null
+  }
+  const truncated = rawContent.length > FILE_PREVIEW_MAX_CHARS
+  return {
+    path: file.path,
+    content: truncated ? rawContent.slice(0, FILE_PREVIEW_MAX_CHARS) : rawContent,
+    language: languageForPath(file.path),
+    size: typeof file.size === 'number' ? file.size : undefined,
+    truncated,
+  }
+}
+
+function isLikelyText(content: string): boolean {
+  if (content.includes('\0')) {
+    return false
+  }
+  if (!content.includes('\uFFFD')) {
+    return true
+  }
+  const replacementCount = [...content].filter((char) => char === '\uFFFD').length
+  return replacementCount / Math.max(content.length, 1) < 0.01
+}
+
+function previewUnavailableReason(
+  previews: SkillMarketFilePreview[],
+  files: SkillMarketFile[],
+  fallbackPreview: string | undefined,
+): string | undefined {
+  if (previews.length > 0 || fallbackPreview) {
+    return undefined
+  }
+  if (files.length === 0) {
+    return 'Marketplace detail did not include a file list for preview.'
+  }
+  return 'No small text files were available for safe preview.'
+}
+
+function languageForPath(filePath: string): string | undefined {
+  switch (fileExtension(filePath.replace(/\\/g, '/'))) {
+    case '.md':
+    case '.mdx':
+      return 'markdown'
+    case '.json':
+    case '.jsonl':
+      return 'json'
+    case '.yaml':
+    case '.yml':
+      return 'yaml'
+    case '.toml':
+      return 'toml'
+    case '.py':
+      return 'python'
+    case '.js':
+    case '.jsx':
+      return 'javascript'
+    case '.ts':
+    case '.tsx':
+      return 'typescript'
+    case '.sh':
+    case '.bash':
+    case '.zsh':
+    case '.fish':
+      return 'shell'
+    case '.ps1':
+      return 'powershell'
+    case '.html':
+      return 'html'
+    case '.css':
+      return 'css'
+    default:
+      return undefined
+  }
+}
+
+function fileExtension(filePath: string): string {
+  const basename = filePath.split('/').pop() ?? filePath
+  const index = basename.lastIndexOf('.')
+  return index >= 0 ? basename.slice(index).toLowerCase() : ''
 }
 
 async function resolveInstalledSkillNames(provider?: InstalledSkillNamesProvider): Promise<Set<string>> {

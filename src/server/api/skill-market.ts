@@ -213,7 +213,7 @@ async function handleInstall(req: Request): Promise<Response> {
     })
   }
 
-  const packageUrl = resolvePackageDownloadUrl(detail)
+  const packageUrl = resolvePackageDownloadUrl(detail, installRequest.version)
   if (!packageUrl) {
     return jsonError(
       'install_not_available',
@@ -272,7 +272,7 @@ function parseInstallRequest(body: Record<string, unknown>): SkillMarketInstallR
   return { source, slug, version: version.trim() }
 }
 
-function resolvePackageDownloadUrl(detail: SkillMarketDetail): URL | null {
+function resolvePackageDownloadUrl(detail: SkillMarketDetail, requestedVersion?: string): URL | null {
   const record = detail as SkillMarketDetail & Record<string, unknown>
   const sourceHosts = allowedPackageHosts(detail.source)
 
@@ -283,7 +283,20 @@ function resolvePackageDownloadUrl(detail: SkillMarketDetail): URL | null {
     }
   }
 
+  if (detail.source === 'clawhub') {
+    return clawHubDownloadUrl(detail.slug, requestedVersion ?? detail.version)
+  }
+
   return null
+}
+
+function clawHubDownloadUrl(slug: string, version?: string): URL {
+  const url = new URL('https://clawhub.ai/api/v1/download')
+  url.searchParams.set('slug', slug)
+  if (version) {
+    url.searchParams.set('version', version)
+  }
+  return url
 }
 
 function parseSafePackageUrl(value: unknown, allowedHosts: string[]): URL | null {
@@ -320,7 +333,11 @@ function isAllowedHost(hostname: string, allowedHosts: string[]): boolean {
 }
 
 async function downloadPackageZip(url: URL): Promise<Buffer> {
-  const res = await fetch(url)
+  const res = await fetch(url, {
+    headers: {
+      accept: 'application/zip, application/json;q=0.9, */*;q=0.1',
+    },
+  })
   if (!res.ok) {
     throw new Error(`Package download failed with HTTP ${res.status}`)
   }
@@ -337,7 +354,38 @@ async function downloadPackageZip(url: URL): Promise<Buffer> {
   if (buffer.byteLength > MAX_PACKAGE_BYTES) {
     throw new Error('Package download is too large')
   }
+  if (!isLikelyZip(buffer)) {
+    if (isJsonResponse(res)) {
+      throw new Error(nonZipJsonDownloadMessage(buffer))
+    }
+    throw new Error('Package download did not return a ZIP archive')
+  }
   return buffer
+}
+
+function isLikelyZip(buffer: Buffer): boolean {
+  return buffer.length >= 4
+    && buffer[0] === 0x50
+    && buffer[1] === 0x4b
+    && (buffer[2] === 0x03 || buffer[2] === 0x05 || buffer[2] === 0x07)
+    && (buffer[3] === 0x04 || buffer[3] === 0x06 || buffer[3] === 0x08)
+}
+
+function isJsonResponse(res: Response): boolean {
+  return (res.headers.get('content-type') ?? '').toLowerCase().includes('application/json')
+}
+
+function nonZipJsonDownloadMessage(buffer: Buffer): string {
+  try {
+    const payload = JSON.parse(buffer.toString('utf-8')) as { kind?: unknown; type?: unknown; source?: unknown }
+    const handoffKind = typeof payload.kind === 'string' ? payload.kind : payload.type
+    if (handoffKind === 'public-github' || payload.source === 'github') {
+      return 'ClawHub returned a public GitHub handoff instead of ZIP bytes; direct local install is not supported yet.'
+    }
+  } catch {
+    // Fall through to the generic message below.
+  }
+  return 'Package download did not return a ZIP archive'
 }
 
 function isAlreadyExistsError(error: unknown): boolean {

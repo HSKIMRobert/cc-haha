@@ -42,11 +42,16 @@ describe('skillMarketStore', () => {
     vi.clearAllMocks()
     useSkillMarketStore.setState({
       items: [],
+      nextCursor: null,
       selectedDetail: null,
       source: 'auto',
+      resolvedSource: null,
+      sourceStatus: null,
+      statusMessage: null,
       sort: 'downloads',
       query: '',
       isLoading: false,
+      isLoadingMore: false,
       isDetailLoading: false,
       isInstalling: false,
       error: null,
@@ -73,10 +78,66 @@ describe('skillMarketStore', () => {
       source: 'skillhub',
       sort: 'trending',
       q: 'vetter',
+      limit: 100,
     })
     expect(useSkillMarketStore.getState().items).toEqual([item])
+    expect(useSkillMarketStore.getState().nextCursor).toBeNull()
+    expect(useSkillMarketStore.getState().resolvedSource).toBe('clawhub')
+    expect(useSkillMarketStore.getState().sourceStatus).toBe('ok')
+    expect(useSkillMarketStore.getState().statusMessage).toBeNull()
     expect(useSkillMarketStore.getState().isLoading).toBe(false)
     expect(useSkillMarketStore.getState().error).toBeNull()
+  })
+
+  it('keeps the resolved fallback source status from the marketplace API', async () => {
+    const item = makeItem({ source: 'skillhub', sourceMode: 'fallback' })
+    mockedSkillMarketApi.list.mockResolvedValue({
+      items: [item],
+      nextCursor: null,
+      source: 'skillhub',
+      sourceStatus: 'fallback',
+      message: 'ClawHub unavailable, using SkillHub.',
+    })
+
+    await useSkillMarketStore.getState().fetchItems()
+
+    expect(useSkillMarketStore.getState().items).toEqual([item])
+    expect(useSkillMarketStore.getState().resolvedSource).toBe('skillhub')
+    expect(useSkillMarketStore.getState().sourceStatus).toBe('fallback')
+    expect(useSkillMarketStore.getState().statusMessage).toBe('ClawHub unavailable, using SkillHub.')
+  })
+
+  it('loads additional marketplace pages without duplicating existing skills', async () => {
+    const first = makeItem({ slug: 'skill-vetter', displayName: 'Skill Vetter' })
+    const duplicate = makeItem({ slug: 'skill-vetter', displayName: 'Skill Vetter Updated' })
+    const second = makeItem({ slug: 'ppt-generator', displayName: 'PPT Generator' })
+    mockedSkillMarketApi.list
+      .mockResolvedValueOnce({
+        items: [first],
+        nextCursor: 'page-2',
+        source: 'clawhub',
+        sourceStatus: 'ok',
+      })
+      .mockResolvedValueOnce({
+        items: [duplicate, second],
+        nextCursor: null,
+        source: 'clawhub',
+        sourceStatus: 'ok',
+      })
+
+    await useSkillMarketStore.getState().fetchItems()
+    await useSkillMarketStore.getState().fetchMore()
+
+    expect(mockedSkillMarketApi.list).toHaveBeenLastCalledWith({
+      source: 'auto',
+      sort: 'downloads',
+      q: undefined,
+      cursor: 'page-2',
+      limit: 100,
+    })
+    expect(useSkillMarketStore.getState().items).toEqual([first, second])
+    expect(useSkillMarketStore.getState().nextCursor).toBeNull()
+    expect(useSkillMarketStore.getState().isLoadingMore).toBe(false)
   })
 
   it('sets an error when loading marketplace items fails', async () => {
@@ -169,6 +230,7 @@ describe('skillMarketStore', () => {
       source: 'auto',
       sort: 'downloads',
       q: undefined,
+      limit: 100,
     })
     expect(mockedSkillMarketApi.detail).toHaveBeenCalledWith('clawhub', 'skill-vetter')
     expect(useSkillMarketStore.getState().selectedDetail).toEqual(refreshed)

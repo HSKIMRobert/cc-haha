@@ -8,14 +8,22 @@ import {
   resetSkillMarketServiceFactoryForTests,
   setSkillMarketServiceFactoryForTests,
 } from '../api/skill-market.js'
-import { normalizeClawHubList, normalizeClawHubScan } from '../services/skillMarket/clawhubAdapter.js'
+import {
+  normalizeClawHubDetail,
+  normalizeClawHubList,
+  normalizeClawHubScan,
+  normalizeClawHubVersionFiles,
+} from '../services/skillMarket/clawhubAdapter.js'
 import { analyzeSkillRisk } from '../services/skillMarket/risk.js'
 import { createSkillMarketService } from '../services/skillMarket/service.js'
 import { normalizeSkillHubDetail, normalizeSkillHubList } from '../services/skillMarket/skillhubAdapter.js'
 import type { SkillMarketDetail } from '../services/skillMarket/types.js'
 import {
   CLAWHUB_SCAN_RESPONSE,
+  CLAWHUB_DETAIL_RESPONSE,
+  CLAWHUB_NESTED_SCAN_RESPONSE,
   CLAWHUB_TOP_SKILLS_RESPONSE,
+  CLAWHUB_VERSION_RESPONSE,
   SKILLHUB_DETAIL_RESPONSE,
   SKILLHUB_TOP_SKILLS_RESPONSE,
 } from './fixtures/skill-market.js'
@@ -63,6 +71,59 @@ describe('skill market source normalization', () => {
       trustSummary: 'No dangerous patterns detected.',
       packageSha256: 'a'.repeat(64),
     })
+  })
+
+  it('normalizes real nested ClawHub scan responses as clean when scanner statuses are clean', () => {
+    expect(normalizeClawHubScan(CLAWHUB_NESTED_SCAN_RESPONSE)).toEqual({
+      trustState: 'clean',
+      trustSummary: 'This is a non-executable checklist for reviewing other skills.',
+      packageSha256: 'b'.repeat(64),
+    })
+  })
+
+  it('normalizes ClawHub detail with scan proof into an installable detail', () => {
+    const detail = normalizeClawHubDetail(CLAWHUB_DETAIL_RESPONSE, CLAWHUB_NESTED_SCAN_RESPONSE)
+
+    expect(detail).toMatchObject({
+      source: 'clawhub',
+      sourceMode: 'primary',
+      slug: 'skill-vetter',
+      displayName: 'Skill Vetter',
+      owner: 'spclaudehome',
+      canonicalUrl: 'https://clawhub.ai/spclaudehome/skill-vetter',
+      version: '1.0.0',
+      trustState: 'clean',
+      trustSummary: 'This is a non-executable checklist for reviewing other skills.',
+      files: [{ path: 'SKILL.md' }],
+      entryPreview: expect.stringContaining('# Skill Vetter'),
+      riskLabels: [],
+      installEligibility: { status: 'installable' },
+    })
+  })
+
+  it('normalizes ClawHub version file manifests for detail previews', () => {
+    const files = normalizeClawHubVersionFiles(CLAWHUB_VERSION_RESPONSE)
+
+    expect(files).toEqual([
+      {
+        path: 'SKILL.md',
+        size: 4561,
+        sha256: 'e8eb7583355c2ae78a79187dca6a1ec448d9c8360e91652871392179f7ffb8bf',
+        contentType: 'text/markdown',
+      },
+      {
+        path: 'scripts/audit.py',
+        size: 320,
+        sha256: 'd'.repeat(64),
+        contentType: 'text/x-python',
+      },
+      {
+        path: 'assets/logo.png',
+        size: 1024,
+        sha256: 'e'.repeat(64),
+        contentType: 'image/png',
+      },
+    ])
   })
 
   it('keeps malicious ClawHub scan responses blocked even with warnings', () => {
@@ -434,6 +495,21 @@ describe('skill market service source selection', () => {
     })
   })
 
+  it('requests a full first marketplace page by default', async () => {
+    const fetchCalls: string[] = []
+    const service = createSkillMarketService({
+      fetchImpl: async (url) => {
+        fetchCalls.push(String(url))
+        return Response.json(CLAWHUB_TOP_SKILLS_RESPONSE)
+      },
+    })
+
+    await service.listSkills({ source: 'clawhub' })
+
+    expect(fetchCalls).toHaveLength(1)
+    expect(fetchCalls[0]).toContain('limit=100')
+  })
+
   it('falls back to SkillHub in auto mode when ClawHub fails and marks installed skills', async () => {
     const fetchCalls: string[] = []
     const service = createSkillMarketService({
@@ -675,28 +751,53 @@ describe('skill market service source selection', () => {
     expect(fetchCalls).toHaveLength(0)
   })
 
-  it('builds detail from the explicit ClawHub list and marks installed eligibility', async () => {
+  it('builds detail from ClawHub detail and scan endpoints and marks installed eligibility', async () => {
     const fetchCalls: string[] = []
     const service = createSkillMarketService({
       fetchImpl: async (url) => {
-        fetchCalls.push(String(url))
-        return Response.json(CLAWHUB_TOP_SKILLS_RESPONSE)
+        const urlString = String(url)
+        fetchCalls.push(urlString)
+        if (urlString.endsWith('/scan')) {
+          return Response.json(CLAWHUB_NESTED_SCAN_RESPONSE)
+        }
+        if (urlString.endsWith('/versions/1.0.0')) {
+          return Response.json(CLAWHUB_VERSION_RESPONSE)
+        }
+        if (urlString.includes('/file?path=SKILL.md')) {
+          return new Response('# Skill Vetter\n\nallowed-tools: Bash\n')
+        }
+        if (urlString.includes('/file?path=scripts%2Faudit.py') || urlString.includes('/file?path=scripts/audit.py')) {
+          return new Response('print("audit")\n')
+        }
+        return Response.json(CLAWHUB_DETAIL_RESPONSE)
       },
       installedSkillNames: new Set(['skill-vetter']),
     })
 
     const detail = await service.getDetail({ source: 'clawhub', slug: 'skill-vetter' })
 
-    expect(fetchCalls).toHaveLength(1)
-    expect(fetchCalls[0]).toStartWith('https://clawhub.ai/api/v1/skills')
-    expect(fetchCalls[0]).toContain('query=skill-vetter')
-    expect(fetchCalls[0]).toContain('limit=100')
+    expect(fetchCalls).toEqual([
+      'https://clawhub.ai/api/v1/skills/skill-vetter',
+      'https://clawhub.ai/api/v1/skills/skill-vetter/scan',
+      'https://clawhub.ai/api/v1/skills/skill-vetter/versions/1.0.0',
+      'https://clawhub.ai/api/v1/skills/skill-vetter/file?path=SKILL.md&version=1.0.0',
+      'https://clawhub.ai/api/v1/skills/skill-vetter/file?path=scripts%2Faudit.py&version=1.0.0',
+    ])
     expect(detail).toMatchObject({
       source: 'clawhub',
       slug: 'skill-vetter',
       installed: true,
-      files: [],
-      riskLabels: [],
+      files: [
+        { path: 'SKILL.md', contentType: 'text/markdown' },
+        { path: 'scripts/audit.py', contentType: 'text/x-python' },
+        { path: 'assets/logo.png', contentType: 'image/png' },
+      ],
+      filePreviews: [
+        { path: 'SKILL.md', language: 'markdown', content: expect.stringContaining('# Skill Vetter') },
+        { path: 'scripts/audit.py', language: 'python', content: expect.stringContaining('print("audit")') },
+      ],
+      entryPreview: expect.stringContaining('# Skill Vetter'),
+      riskLabels: ['allowed-tools', 'scripts', 'executables'],
       installEligibility: {
         status: 'installed',
         installedSkillName: 'skill-vetter',
@@ -705,13 +806,22 @@ describe('skill market service source selection', () => {
   })
 
   it('blocks uninstalled detail installs when only list-level ClawHub metadata is available', async () => {
+    const fetchCalls: string[] = []
     const service = createSkillMarketService({
-      fetchImpl: async () => Response.json(CLAWHUB_TOP_SKILLS_RESPONSE),
+      fetchImpl: async (url) => {
+        fetchCalls.push(String(url))
+        if (String(url) === 'https://clawhub.ai/api/v1/skills/skill-vetter') {
+          return new Response('not found', { status: 404 })
+        }
+        return Response.json(CLAWHUB_TOP_SKILLS_RESPONSE)
+      },
       installedSkillNames: new Set(),
     })
 
     const detail = await service.getDetail({ source: 'clawhub', slug: 'skill-vetter' })
 
+    expect(fetchCalls[0]).toBe('https://clawhub.ai/api/v1/skills/skill-vetter')
+    expect(fetchCalls[1]).toContain('https://clawhub.ai/api/v1/skills?')
     expect(detail).toMatchObject({
       source: 'clawhub',
       slug: 'skill-vetter',
@@ -971,11 +1081,12 @@ describe('skill market API', () => {
     })
   })
 
-  it('does not install from canonical or upstream URLs when package metadata is missing', async () => {
+  it('does not install SkillHub details from canonical or upstream URLs when package metadata is missing', async () => {
     const fetchCalls: string[] = []
     setInstallDetail(makeApiDetail({
-      canonicalUrl: 'https://clawhub.ai/packages/skill-vetter.zip',
-      upstreamUrl: 'https://clawhub.ai/upstream/skill-vetter.zip',
+      source: 'skillhub',
+      canonicalUrl: 'https://skillhub.cn/packages/skill-vetter.zip',
+      upstreamUrl: 'https://skillhub.cn/upstream/skill-vetter.zip',
     }))
     globalThis.fetch = async (input) => {
       fetchCalls.push(String(input))
@@ -984,7 +1095,7 @@ describe('skill market API', () => {
     const url = new URL('/api/skill-market/install', 'http://localhost:3456')
     const req = new Request(url, {
       method: 'POST',
-      body: JSON.stringify({ source: 'clawhub', slug: 'skill-vetter' }),
+      body: JSON.stringify({ source: 'skillhub', slug: 'skill-vetter' }),
     })
 
     const res = await handleSkillMarketApi(req, url, ['api', 'skill-market', 'install'])
@@ -994,7 +1105,7 @@ describe('skill market API', () => {
     await expect(res.json()).resolves.toMatchObject({ error: 'install_not_available' })
   })
 
-  it('installs an installable marketplace package into the user skill directory', async () => {
+  it('installs an installable ClawHub marketplace package from the official download endpoint', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'skill-market-api-install-'))
     const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
     const packageZip = Buffer.from(zipSync({
@@ -1006,12 +1117,14 @@ describe('skill market API', () => {
       process.env.CLAUDE_CONFIG_DIR = path.join(tmpDir, '.claude')
       setInstallDetail(makeApiDetail({
         version: '1.0.0',
-        downloadUrl: 'https://clawhub.ai/packages/skill-vetter.zip',
       }))
-      globalThis.fetch = async (input) => {
+      globalThis.fetch = async (input, init) => {
         fetchCalls.push(String(input))
+        expect(init?.headers).toEqual({
+          accept: 'application/zip, application/json;q=0.9, */*;q=0.1',
+        })
         return new Response(packageZip, {
-          headers: { 'content-length': String(packageZip.byteLength) },
+          headers: { 'content-length': String(packageZip.byteLength), 'content-type': 'application/zip' },
         })
       }
       const url = new URL('/api/skill-market/install', 'http://localhost:3456')
@@ -1023,7 +1136,7 @@ describe('skill market API', () => {
       const res = await handleSkillMarketApi(req, url, ['api', 'skill-market', 'install'])
 
       expect(res.status).toBe(200)
-      expect(fetchCalls).toEqual(['https://clawhub.ai/packages/skill-vetter.zip'])
+      expect(fetchCalls).toEqual(['https://clawhub.ai/api/v1/download?slug=skill-vetter&version=1.0.0'])
       await expect(res.json()).resolves.toEqual({
         installed: true,
         skillName: 'skill-vetter',
@@ -1040,6 +1153,29 @@ describe('skill market API', () => {
       }
       await fs.rm(tmpDir, { recursive: true, force: true })
     }
+  })
+
+  it('rejects ClawHub public GitHub handoff responses instead of installing non-zip bytes', async () => {
+    setInstallDetail(makeApiDetail({
+      version: '1.0.0',
+    }))
+    globalThis.fetch = async () => Response.json({
+      kind: 'public-github',
+      repo: 'example/skill-vetter',
+    })
+    const url = new URL('/api/skill-market/install', 'http://localhost:3456')
+    const req = new Request(url, {
+      method: 'POST',
+      body: JSON.stringify({ source: 'clawhub', slug: 'skill-vetter', version: '1.0.0' }),
+    })
+
+    const res = await handleSkillMarketApi(req, url, ['api', 'skill-market', 'install'])
+
+    expect(res.status).toBe(502)
+    await expect(res.json()).resolves.toMatchObject({
+      error: 'install_download_failed',
+      message: expect.stringContaining('GitHub handoff'),
+    })
   })
 
   it('rejects invalid install JSON', async () => {

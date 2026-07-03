@@ -56,6 +56,14 @@ function makeDetail(overrides: Partial<SkillMarketDetail> = {}): SkillMarketDeta
   return {
     ...makeItem(),
     files: [{ path: 'SKILL.md', size: 512 }],
+    filePreviews: [
+      {
+        path: 'SKILL.md',
+        content: '# PPT Generator',
+        language: 'markdown',
+        size: 512,
+      },
+    ],
     entryPreview: '# PPT Generator',
     riskLabels: [],
     installEligibility: { status: 'installable' },
@@ -68,11 +76,16 @@ describe('SkillCenter', () => {
     useSettingsStore.setState({ locale: 'en' })
     useSkillMarketStore.setState({
       items: [],
+      nextCursor: null,
       selectedDetail: null,
       source: 'auto',
+      resolvedSource: null,
+      sourceStatus: null,
+      statusMessage: null,
       sort: 'downloads',
       query: '',
       isLoading: false,
+      isLoadingMore: false,
       isDetailLoading: false,
       isInstalling: false,
       error: null,
@@ -108,11 +121,16 @@ describe('SkillCenter', () => {
     useSettingsStore.setState({ locale: 'en' })
     useSkillMarketStore.setState({
       items: [],
+      nextCursor: null,
       selectedDetail: null,
       source: 'auto',
+      resolvedSource: null,
+      sourceStatus: null,
+      statusMessage: null,
       sort: 'downloads',
       query: '',
       isLoading: false,
+      isLoadingMore: false,
       isDetailLoading: false,
       isInstalling: false,
       error: null,
@@ -128,13 +146,15 @@ describe('SkillCenter', () => {
   })
 
   it('loads marketplace cards and opens a detail confirmation panel', async () => {
-    render(<SkillCenter />)
+    const { container } = render(<SkillCenter />)
 
+    expect(screen.getByRole('tab', { name: 'Marketplace' })).toHaveAttribute('aria-selected', 'true')
     expect(await screen.findByRole('button', { name: 'PPT Generator' })).toBeInTheDocument()
     expect(mockedSkillMarketApi.list).toHaveBeenCalledWith({
       source: 'auto',
       sort: 'downloads',
       q: undefined,
+      limit: 100,
     })
 
     fireEvent.click(screen.getByRole('button', { name: 'PPT Generator' }))
@@ -144,8 +164,15 @@ describe('SkillCenter', () => {
     })
     const detail = await screen.findByText('# PPT Generator')
     expect(detail).toBeInTheDocument()
+    const dialog = screen.getByRole('dialog', { name: 'PPT Generator' })
+    const detailLayer = screen.getByTestId('skill-market-detail-layer')
+    expect(container.contains(dialog)).toBe(false)
+    expect(document.body.contains(dialog)).toBe(true)
+    expect(detailLayer).toHaveClass('fixed', 'inset-0', 'z-50')
     expect(screen.getByRole('button', { name: 'Install' })).toBeEnabled()
     expect(screen.getByText('Open upstream')).toHaveAttribute('href', 'https://github.com/example/ppt-generator')
+    expect(screen.getByText('File preview')).toBeInTheDocument()
+    expect(screen.getByText('SKILL.md')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Install' }))
     expect(mockedSkillMarketApi.install).not.toHaveBeenCalled()
@@ -156,6 +183,120 @@ describe('SkillCenter', () => {
     await waitFor(() => {
       expect(mockedSkillMarketApi.install).toHaveBeenCalledWith('clawhub', 'ppt-generator', '1.0.0')
     })
+  })
+
+  it('renders raw Markdown and Python previews for an uninstalled marketplace skill', async () => {
+    mockedSkillMarketApi.detail.mockResolvedValue({
+      detail: makeDetail({
+        files: [
+          { path: 'SKILL.md', size: 256, contentType: 'text/markdown' },
+          { path: 'scripts/audit.py', size: 42, contentType: 'text/x-python' },
+        ],
+        filePreviews: [
+          {
+            path: 'SKILL.md',
+            content: '# Audit Skill\n\nUse this before install.',
+            language: 'markdown',
+            size: 256,
+          },
+          {
+            path: 'scripts/audit.py',
+            content: 'print("audit")\n',
+            language: 'python',
+            size: 42,
+          },
+        ],
+        entryPreview: '# Audit Skill',
+        riskLabels: ['scripts', 'executables'],
+      }),
+    })
+
+    render(<SkillCenter />)
+    fireEvent.click(await screen.findByRole('button', { name: 'PPT Generator' }))
+
+    expect(await screen.findByText('File preview')).toBeInTheDocument()
+    expect(screen.getByText('scripts/audit.py')).toBeInTheDocument()
+    expect(screen.getByText('python')).toBeInTheDocument()
+    expect(screen.getByText(/print\("audit"\)/)).toBeInTheDocument()
+    expect(screen.getByText('Scripts')).toBeInTheDocument()
+    expect(screen.getByText('Executables')).toBeInTheDocument()
+  })
+
+  it('explains when marketplace file preview is unavailable', async () => {
+    mockedSkillMarketApi.detail.mockResolvedValue({
+      detail: makeDetail({
+        source: 'skillhub',
+        sourceMode: 'fallback',
+        filePreviews: [],
+        entryPreview: undefined,
+        previewUnavailableReason: 'SkillHub does not expose a safe raw file preview endpoint yet.',
+      }),
+    })
+
+    render(<SkillCenter />)
+    fireEvent.click(await screen.findByRole('button', { name: 'PPT Generator' }))
+
+    expect(await screen.findByText('Preview unavailable')).toBeInTheDocument()
+    expect(screen.getByText('SkillHub does not expose a safe raw file preview endpoint yet.')).toBeInTheDocument()
+  })
+
+  it('shows marketplace source fallback status without losing the selected source control', async () => {
+    mockedSkillMarketApi.list.mockResolvedValue({
+      items: [makeItem({ source: 'skillhub', sourceMode: 'fallback' })],
+      nextCursor: null,
+      source: 'skillhub',
+      sourceStatus: 'fallback',
+      message: 'ClawHub unavailable, using SkillHub.',
+    })
+
+    render(<SkillCenter />)
+
+    expect(await screen.findByText('ClawHub unavailable, using SkillHub.')).toBeInTheDocument()
+    expect(screen.getByText('Fallback active')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Auto' })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('replaces raw network failures with a user-facing marketplace error', async () => {
+    mockedSkillMarketApi.list.mockRejectedValue(new Error('Failed to fetch'))
+
+    render(<SkillCenter />)
+
+    expect(await screen.findByText('Marketplace unavailable')).toBeInTheDocument()
+    expect(screen.getByText(/could not be reached/)).toBeInTheDocument()
+    expect(screen.queryByText('Failed to fetch')).not.toBeInTheDocument()
+  })
+
+  it('opens the installed skill detail from an installed marketplace item', async () => {
+    const fetchSkillDetail = vi.fn()
+    useSkillStore.setState({
+      skills: [
+        {
+          name: 'ppt-generator',
+          displayName: 'PPT Generator',
+          description: 'Installed local skill',
+          source: 'user',
+          userInvocable: true,
+          contentLength: 80,
+          hasDirectory: true,
+        },
+      ],
+      fetchSkillDetail,
+    })
+    mockedSkillMarketApi.detail.mockResolvedValue({
+      detail: makeDetail({
+        installed: true,
+        installEligibility: { status: 'installed', installedSkillName: 'ppt-generator' },
+      }),
+    })
+    render(<SkillCenter />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'PPT Generator' }))
+    const viewInstalledButton = await screen.findByRole('button', { name: 'View installed' })
+    expect(viewInstalledButton).toHaveClass('bg-[var(--color-success-container)]')
+    fireEvent.click(viewInstalledButton)
+
+    expect(screen.getByRole('tab', { name: 'Mine' })).toHaveAttribute('aria-selected', 'true')
+    expect(fetchSkillDetail).toHaveBeenCalledWith('user', 'ppt-generator', undefined, 'skills')
   })
 
   it('submits market searches without auto-searching every keystroke', async () => {
@@ -175,6 +316,7 @@ describe('SkillCenter', () => {
         source: 'auto',
         sort: 'downloads',
         q: 'ppt',
+        limit: 100,
       })
     })
   })
@@ -204,7 +346,7 @@ describe('SkillCenter', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Mine' }))
 
     expect(screen.getByTestId('installed-skill-list')).toBeInTheDocument()
-    expect(within(screen.getByTestId('skill-mine-tab')).getByText('Installed skills')).toBeInTheDocument()
+    expect(within(screen.getByTestId('skill-mine-tab')).getByTestId('installed-skill-list')).toBeInTheDocument()
   })
 
   it('opens the mine tab when an installed skill detail is already selected', async () => {

@@ -3,6 +3,7 @@ import { skillMarketApi } from '../api/skillMarket'
 import type {
   SkillMarketDetail,
   SkillMarketItem,
+  SkillMarketListResponse,
   SkillMarketListSource,
   SkillMarketSort,
   SkillMarketSource,
@@ -10,11 +11,16 @@ import type {
 
 type SkillMarketStore = {
   items: SkillMarketItem[]
+  nextCursor: string | null
   selectedDetail: SkillMarketDetail | null
   source: SkillMarketListSource
+  resolvedSource: SkillMarketSource | null
+  sourceStatus: SkillMarketListResponse['sourceStatus'] | null
+  statusMessage: string | null
   sort: SkillMarketSort
   query: string
   isLoading: boolean
+  isLoadingMore: boolean
   isDetailLoading: boolean
   isInstalling: boolean
   error: string | null
@@ -22,48 +28,93 @@ type SkillMarketStore = {
   setSort: (sort: SkillMarketSort) => void
   setQuery: (query: string) => void
   fetchItems: () => Promise<void>
+  fetchMore: () => Promise<void>
   fetchDetail: (source: SkillMarketSource, slug: string) => Promise<void>
   installSelected: () => Promise<void>
   clearDetail: () => void
 }
 
 let detailRequestSeq = 0
+const MARKET_PAGE_LIMIT = 100
 
 export const useSkillMarketStore = create<SkillMarketStore>((set, get) => ({
   items: [],
+  nextCursor: null,
   selectedDetail: null,
   source: 'auto',
+  resolvedSource: null,
+  sourceStatus: null,
+  statusMessage: null,
   sort: 'downloads',
   query: '',
   isLoading: false,
+  isLoadingMore: false,
   isDetailLoading: false,
   isInstalling: false,
   error: null,
 
   setSource: (source) => {
     detailRequestSeq += 1
-    set({ source, selectedDetail: null, isDetailLoading: false })
+    set({ source, selectedDetail: null, nextCursor: null, isDetailLoading: false, statusMessage: null })
   },
   setSort: (sort) => {
     detailRequestSeq += 1
-    set({ sort, selectedDetail: null, isDetailLoading: false })
+    set({ sort, selectedDetail: null, nextCursor: null, isDetailLoading: false, statusMessage: null })
   },
   setQuery: (query) => set({ query }),
 
   fetchItems: async () => {
     const { source, sort, query } = get()
     detailRequestSeq += 1
-    set({ isLoading: true, isDetailLoading: false, selectedDetail: null, error: null })
+    set({ isLoading: true, isLoadingMore: false, isDetailLoading: false, selectedDetail: null, error: null })
     try {
       const result = await skillMarketApi.list({
         source,
         sort,
         q: query.trim() || undefined,
+        limit: MARKET_PAGE_LIMIT,
       })
-      set({ items: result.items, isLoading: false })
+      set({
+        items: result.items,
+        nextCursor: result.nextCursor,
+        resolvedSource: result.source,
+        sourceStatus: result.sourceStatus,
+        statusMessage: result.message ?? null,
+        isLoading: false,
+      })
     } catch (err) {
       set({
         isLoading: false,
+        nextCursor: null,
+        error: getErrorMessage(err),
+      })
+    }
+  },
+
+  fetchMore: async () => {
+    const { source, sort, query, nextCursor, isLoading, isLoadingMore } = get()
+    if (!nextCursor || isLoading || isLoadingMore) return
+
+    set({ isLoadingMore: true, error: null })
+    try {
+      const result = await skillMarketApi.list({
+        source,
+        sort,
+        q: query.trim() || undefined,
+        cursor: nextCursor,
+        limit: MARKET_PAGE_LIMIT,
+      })
+      set((state) => ({
+        items: mergeMarketItems(state.items, result.items),
+        nextCursor: result.nextCursor,
+        resolvedSource: result.source,
+        sourceStatus: result.sourceStatus,
+        statusMessage: result.message ?? state.statusMessage,
+        isLoadingMore: false,
+      }))
+    } catch (err) {
+      set({
+        isLoadingMore: false,
         error: getErrorMessage(err),
       })
     }
@@ -109,6 +160,18 @@ export const useSkillMarketStore = create<SkillMarketStore>((set, get) => ({
     set({ selectedDetail: null, isDetailLoading: false })
   },
 }))
+
+function mergeMarketItems(current: SkillMarketItem[], incoming: SkillMarketItem[]): SkillMarketItem[] {
+  const seen = new Set(current.map((item) => `${item.source}:${item.slug}`))
+  const merged = [...current]
+  for (const item of incoming) {
+    const key = `${item.source}:${item.slug}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    merged.push(item)
+  }
+  return merged
+}
 
 function getErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err)

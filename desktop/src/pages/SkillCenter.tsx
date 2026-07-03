@@ -1,20 +1,31 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import {
   AlertTriangle,
+  BadgeCheck,
   Check,
+  ChevronRight,
+  Clock3,
   Download,
   ExternalLink,
   FileText,
+  Globe2,
+  ListFilter,
   Lock,
+  Package,
   RefreshCw,
   Search,
   ShieldCheck,
+  Sparkles,
+  Star,
   X,
 } from 'lucide-react'
 import { SkillList } from '../components/skills/SkillList'
 import { SkillDetail } from '../components/skills/SkillDetail'
 import { ConfirmDialog } from '../components/shared/ConfirmDialog'
 import { useTranslation } from '../i18n'
+import { formatBytes } from '../lib/formatBytes'
+import { useSessionStore } from '../stores/sessionStore'
 import { useSkillMarketStore } from '../stores/skillMarketStore'
 import { useSkillStore } from '../stores/skillStore'
 import type {
@@ -23,29 +34,45 @@ import type {
   SkillMarketItem,
   SkillMarketListSource,
   SkillMarketSort,
+  SkillMarketSource,
   SkillMarketTrustState,
 } from '../types/skillMarket'
 
 type SkillCenterTab = 'marketplace' | 'mine'
+type MarketFilter = 'all' | 'safe' | 'installed' | 'apiKey' | 'popular'
+type TFunction = ReturnType<typeof useTranslation>
 
 const SOURCE_OPTIONS: SkillMarketListSource[] = ['auto', 'clawhub', 'skillhub']
 const SORT_OPTIONS: SkillMarketSort[] = ['downloads', 'installs', 'stars', 'updated', 'trending']
+const FILTER_OPTIONS: MarketFilter[] = ['all', 'safe', 'popular', 'installed', 'apiKey']
 const TRUST_SAFE: SkillMarketTrustState[] = ['clean', 'benign', 'signed', 'official']
 
 export function SkillCenter() {
   const t = useTranslation()
   const selectedInstalledSkill = useSkillStore((s) => s.selectedSkill)
+  const installedSkills = useSkillStore((s) => s.skills)
+  const fetchInstalledSkillDetail = useSkillStore((s) => s.fetchSkillDetail)
+  const sessions = useSessionStore((s) => s.sessions)
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
+  const activeSession = sessions.find((session) => session.id === activeSessionId)
+  const currentWorkDir = activeSession?.workDir || undefined
   const [activeTab, setActiveTab] = useState<SkillCenterTab>(() =>
     selectedInstalledSkill ? 'mine' : 'marketplace'
   )
+  const [marketFilter, setMarketFilter] = useState<MarketFilter>('all')
   const [pendingInstallDetail, setPendingInstallDetail] = useState<SkillMarketDetail | null>(null)
   const {
     items,
+    nextCursor,
     selectedDetail,
     source,
+    resolvedSource,
+    sourceStatus,
+    statusMessage,
     sort,
     query,
     isLoading,
+    isLoadingMore,
     isDetailLoading,
     isInstalling,
     error,
@@ -53,6 +80,7 @@ export function SkillCenter() {
     setSort,
     setQuery,
     fetchItems,
+    fetchMore,
     fetchDetail,
     installSelected,
     clearDetail,
@@ -73,6 +101,18 @@ export function SkillCenter() {
     () => items.filter((item) => item.installed).length,
     [items],
   )
+  const safeCount = useMemo(
+    () => items.filter((item) => TRUST_SAFE.includes(item.trustState)).length,
+    [items],
+  )
+  const totalDownloads = useMemo(
+    () => items.reduce((sum, item) => sum + (item.downloads ?? item.installs ?? 0), 0),
+    [items],
+  )
+  const filteredItems = useMemo(
+    () => items.filter((item) => matchesMarketFilter(item, marketFilter)),
+    [items, marketFilter],
+  )
 
   const handleSearch = (event?: FormEvent<HTMLFormElement>) => {
     event?.preventDefault()
@@ -84,155 +124,234 @@ export function SkillCenter() {
     void fetchItems()
   }
 
+  const handleOpenInstalled = (detail: SkillMarketDetail) => {
+    const eligibility = detail.installEligibility
+    const skillName = eligibility.status === 'installed'
+      ? eligibility.installedSkillName
+      : detail.slug
+    setActiveTab('mine')
+    void fetchInstalledSkillDetail('user', skillName, currentWorkDir, 'skills')
+  }
+
   return (
-    <div className="flex h-full min-h-0 flex-col bg-[var(--color-surface)]">
-      <header className="flex flex-none flex-col gap-4 border-b border-[var(--color-border)] px-6 py-4">
-        <div className="flex items-center justify-between gap-3">
-          <h2 className="text-lg font-semibold tracking-normal text-[var(--color-text-primary)]">
+    <div className="flex h-full min-h-0 flex-col bg-[var(--color-surface-container-lowest)]">
+      <header className="flex flex-none items-center justify-between gap-4 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-7 py-3">
+        <div className="flex min-w-0 items-center gap-4">
+          <h2 className="shrink-0 text-xl font-semibold tracking-normal text-[var(--color-text-primary)]">
             {t('skillCenter.title')}
           </h2>
-          {activeTab === 'marketplace' ? (
+          <div
+            role="tablist"
+            aria-label={t('skillCenter.title')}
+            className="inline-flex rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-container-low)] p-1"
+          >
             <button
               type="button"
-              onClick={() => void fetchItems()}
-              disabled={isLoading}
-              className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed disabled:opacity-60"
+              role="tab"
+              aria-selected={activeTab === 'marketplace'}
+              className={tabClass(activeTab === 'marketplace')}
+              onClick={() => setActiveTab('marketplace')}
+              data-testid="skill-market-tab-button"
             >
-              <RefreshCw size={15} className={isLoading ? 'animate-spin' : ''} aria-hidden="true" />
-              {t('skillCenter.marketplace.refresh')}
+              <Sparkles size={14} aria-hidden="true" />
+              <span>{t('skillCenter.tab.marketplace')}</span>
             </button>
-          ) : null}
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'mine'}
+              className={tabClass(activeTab === 'mine')}
+              onClick={() => setActiveTab('mine')}
+              data-testid="skill-mine-tab-button"
+            >
+              <Package size={14} aria-hidden="true" />
+              <span>{t('skillCenter.tab.mine')}</span>
+              {installedSkills.length > 0 ? (
+                <span
+                  aria-hidden="true"
+                  className="ml-1 rounded-md bg-[var(--color-surface-container-high)] px-1.5 py-0.5 text-[10px] text-[var(--color-text-tertiary)]"
+                >
+                  {installedSkills.length}
+                </span>
+              ) : null}
+            </button>
+          </div>
         </div>
-        <div
-          role="tablist"
-          aria-label={t('skillCenter.title')}
-          className="inline-flex w-fit rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-container-low)] p-1"
-        >
+
+        {activeTab === 'marketplace' ? (
           <button
             type="button"
-            role="tab"
-            aria-selected={activeTab === 'marketplace'}
-            className={tabClass(activeTab === 'marketplace')}
-            onClick={() => setActiveTab('marketplace')}
+            onClick={() => void fetchItems()}
+            disabled={isLoading}
+            className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {t('skillCenter.tab.marketplace')}
+            <RefreshCw size={15} className={isLoading ? 'animate-spin' : ''} aria-hidden="true" />
+            {t('skillCenter.marketplace.refresh')}
           </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'mine'}
-            className={tabClass(activeTab === 'mine')}
-            onClick={() => setActiveTab('mine')}
-          >
-            {t('skillCenter.tab.mine')}
-          </button>
-        </div>
+        ) : null}
       </header>
 
-      <main className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+      <main className="min-h-0 flex-1 overflow-y-auto px-7 py-4">
         {activeTab === 'marketplace' ? (
           <section
             role="tabpanel"
             data-testid="skill-marketplace-tab"
-            className="flex min-h-full min-w-0 flex-col gap-4"
+            className="mx-auto flex min-h-full max-w-[1720px] min-w-0 flex-col gap-4"
           >
-            <div className="grid gap-3 lg:grid-cols-[minmax(280px,1fr)_160px_160px_auto] lg:items-end">
-              <form onSubmit={handleSearch} className="min-w-0">
-                <label className="mb-1.5 block text-xs font-medium text-[var(--color-text-secondary)]" htmlFor="skill-market-search">
-                  {t('skillCenter.marketplace.searchLabel')}
-                </label>
-                <div className="relative">
-                  <Search
-                    size={15}
-                    className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)]"
-                    aria-hidden="true"
-                  />
-                  <input
-                    id="skill-market-search"
-                    value={query}
-                    onChange={(event) => setQuery(event.target.value)}
-                    placeholder={t('skillCenter.marketplace.searchPlaceholder')}
-                    className="h-10 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] pl-9 pr-20 text-sm text-[var(--color-text-primary)] outline-none transition-colors placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-border-focus)] focus:shadow-[var(--shadow-focus-ring)]"
-                  />
-                  {query ? (
-                    <button
-                      type="button"
-                      aria-label={t('skillCenter.marketplace.clearSearch')}
-                      onClick={handleClearSearch}
-                      className="absolute right-11 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
-                    >
-                      <X size={14} aria-hidden="true" />
-                    </button>
-                  ) : null}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                {FILTER_OPTIONS.map((filter) => (
                   <button
-                    type="submit"
-                    aria-label={t('skillCenter.marketplace.runSearch')}
-                    className="absolute right-1.5 top-1/2 flex h-7 w-8 -translate-y-1/2 items-center justify-center rounded-md bg-[var(--color-brand)] text-white transition-colors hover:bg-[var(--color-brand-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+                    key={filter}
+                    type="button"
+                    onClick={() => setMarketFilter(filter)}
+                    className={marketFilterClass(marketFilter === filter)}
                   >
-                    <Search size={14} aria-hidden="true" />
+                    {t(`skillCenter.marketplace.filter.${filter}`)}
                   </button>
-                </div>
-              </form>
-
-              <SelectField
-                label={t('skillCenter.marketplace.sourceLabel')}
-                value={source}
-                onChange={(value) => setSource(value as SkillMarketListSource)}
-                options={SOURCE_OPTIONS.map((value) => ({
-                  value,
-                  label: t(`skillCenter.marketplace.source.${value}`),
-                }))}
-              />
-              <SelectField
-                label={t('skillCenter.marketplace.sortLabel')}
-                value={sort}
-                onChange={(value) => setSort(value as SkillMarketSort)}
-                options={SORT_OPTIONS.map((value) => ({
-                  value,
-                  label: t(`skillCenter.marketplace.sort.${value}`),
-                }))}
-              />
-
-              <div className="grid grid-cols-2 gap-2 lg:w-[168px]">
-                <Metric label={t('skillCenter.marketplace.total')} value={String(items.length)} />
-                <Metric label={t('skillCenter.marketplace.installed')} value={String(installedCount)} />
+                ))}
               </div>
+
+              <form
+                onSubmit={handleSearch}
+                className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2"
+              >
+                <div className="min-w-[260px] max-w-[420px] flex-1">
+                  <label className="sr-only" htmlFor="skill-market-search">
+                    {t('skillCenter.marketplace.searchLabel')}
+                  </label>
+                  <div className="relative">
+                    <Search
+                      size={15}
+                      className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)]"
+                      aria-hidden="true"
+                    />
+                    <input
+                      id="skill-market-search"
+                      value={query}
+                      onChange={(event) => setQuery(event.target.value)}
+                      placeholder={t('skillCenter.marketplace.searchPlaceholder')}
+                      className="h-9 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] pl-9 pr-20 text-sm text-[var(--color-text-primary)] outline-none transition-colors placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-border-focus)] focus:shadow-[var(--shadow-focus-ring)]"
+                    />
+                    {query ? (
+                      <button
+                        type="button"
+                        aria-label={t('skillCenter.marketplace.clearSearch')}
+                        onClick={handleClearSearch}
+                        className="absolute right-11 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
+                      >
+                        <X size={14} aria-hidden="true" />
+                      </button>
+                    ) : null}
+                    <button
+                      type="submit"
+                      aria-label={t('skillCenter.marketplace.runSearch')}
+                      className="absolute right-1.5 top-1/2 flex h-7 w-8 -translate-y-1/2 items-center justify-center rounded-md bg-[var(--color-brand)] text-[var(--color-on-primary)] transition-colors hover:bg-[var(--color-brand-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+                    >
+                      <Search size={14} aria-hidden="true" />
+                    </button>
+                  </div>
+                </div>
+
+                <SourceSwitch
+                  value={source}
+                  onChange={(value) => setSource(value)}
+                />
+                <SelectField
+                  label={t('skillCenter.marketplace.sortLabel')}
+                  value={sort}
+                  onChange={(value) => setSort(value as SkillMarketSort)}
+                  options={SORT_OPTIONS.map((value) => ({
+                    value,
+                    label: t(`skillCenter.marketplace.sort.${value}`),
+                  }))}
+                  compact
+                />
+              </form>
             </div>
 
+            <MarketplaceStatusLine
+              t={t}
+              source={source}
+              resolvedSource={resolvedSource}
+              sourceStatus={sourceStatus}
+              statusMessage={statusMessage}
+              total={items.length}
+              safeCount={safeCount}
+              installedCount={installedCount}
+              totalDownloads={totalDownloads}
+              loading={isLoading}
+            />
+
             {error ? (
-              <div className="rounded-md border border-[var(--color-error)]/30 bg-[var(--color-error-container)] px-3 py-2 text-sm text-[var(--color-error)]">
-                {error}
+              <div className="flex items-start gap-2 rounded-lg border border-[var(--color-warning)]/30 bg-[var(--color-warning-container)] px-3 py-2 text-sm text-[var(--color-warning)]">
+                <AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
+                <div className="min-w-0">
+                  <div className="font-medium">{t('skillCenter.marketplace.errorTitle')}</div>
+                  <div className="mt-0.5 break-words text-xs leading-5">
+                    {formatMarketError(t, error)}
+                  </div>
+                </div>
               </div>
             ) : null}
 
-            <div className="grid min-h-0 gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
+            <div className="min-h-0">
               <div className="min-w-0">
                 {isLoading ? (
                   <LoadingState label={t('skillCenter.marketplace.loading')} />
                 ) : items.length === 0 ? (
-                  <EmptyState label={t('skillCenter.marketplace.empty')} />
+                  <EmptyState
+                    icon={<Search size={22} aria-hidden="true" />}
+                    label={t('skillCenter.marketplace.empty')}
+                    hint={t('skillCenter.marketplace.emptyHint')}
+                  />
+                ) : filteredItems.length === 0 ? (
+                  <EmptyState
+                    icon={<ListFilter size={22} aria-hidden="true" />}
+                    label={t('skillCenter.marketplace.filterEmpty')}
+                    hint={t('skillCenter.marketplace.filterEmptyHint')}
+                  />
                 ) : (
-                  <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-3">
-                    {items.map((item) => (
-                      <SkillMarketCard
-                        key={`${item.source}-${item.slug}`}
-                        item={item}
-                        active={selectedDetail?.source === item.source && selectedDetail.slug === item.slug}
-                        onSelect={() => void fetchDetail(item.source, item.slug)}
-                      />
-                    ))}
-                  </div>
+                  <>
+                    <div className="grid gap-2.5 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+                      {filteredItems.map((item) => (
+                        <SkillMarketCard
+                          key={`${item.source}-${item.slug}`}
+                          item={item}
+                          active={selectedDetail?.source === item.source && selectedDetail.slug === item.slug}
+                          onSelect={() => void fetchDetail(item.source, item.slug)}
+                        />
+                      ))}
+                    </div>
+                    {nextCursor ? (
+                      <div className="mt-4 flex justify-center">
+                        <button
+                          type="button"
+                          onClick={() => void fetchMore()}
+                          disabled={isLoadingMore}
+                          className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-4 text-sm font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <RefreshCw size={14} className={isLoadingMore ? 'animate-spin' : ''} aria-hidden="true" />
+                          {isLoadingMore
+                            ? t('skillCenter.marketplace.loadingMore')
+                            : t('skillCenter.marketplace.loadMore')}
+                        </button>
+                      </div>
+                    ) : null}
+                  </>
                 )}
               </div>
-
+            </div>
+            {selectedDetail || isDetailLoading ? (
               <SkillMarketDetailPanel
                 detail={selectedDetail}
                 loading={isDetailLoading}
                 installing={isInstalling}
                 onInstall={() => selectedDetail && setPendingInstallDetail(selectedDetail)}
+                onOpenInstalled={handleOpenInstalled}
                 onClose={clearDetail}
               />
-            </div>
+            ) : null}
             <ConfirmDialog
               open={!!pendingInstallDetail}
               onClose={() => setPendingInstallDetail(null)}
@@ -249,12 +368,158 @@ export function SkillCenter() {
             />
           </section>
         ) : (
-          <div role="tabpanel" data-testid="skill-mine-tab">
+          <section
+            role="tabpanel"
+            data-testid="skill-mine-tab"
+            className="mx-auto flex min-h-full max-w-[1680px] min-w-0 flex-col gap-4"
+          >
+            <InstalledLibraryHeader
+              t={t}
+              selected={!!selectedInstalledSkill}
+              installedCount={installedSkills.length}
+            />
             {selectedInstalledSkill ? <SkillDetail /> : <SkillList />}
-          </div>
+          </section>
         )}
       </main>
     </div>
+  )
+}
+
+function MarketplaceStatusLine({
+  t,
+  source,
+  resolvedSource,
+  sourceStatus,
+  statusMessage,
+  total,
+  safeCount,
+  installedCount,
+  totalDownloads,
+  loading,
+}: {
+  t: TFunction
+  source: SkillMarketListSource
+  resolvedSource: SkillMarketSource | null
+  sourceStatus: 'ok' | 'fallback' | 'cached' | null
+  statusMessage: string | null
+  total: number
+  safeCount: number
+  installedCount: number
+  totalDownloads: number
+  loading: boolean
+}) {
+  const sourceName = resolvedSource
+    ? t(`skillCenter.marketplace.source.${resolvedSource}`)
+    : t(`skillCenter.marketplace.source.${source}`)
+  const statusLabel = sourceStatus
+    ? t(`skillCenter.marketplace.sourceStatus.${sourceStatus}`)
+    : t('skillCenter.marketplace.sourceStatus.pending')
+
+  return (
+    <div className="flex min-h-8 flex-wrap items-center gap-x-3 gap-y-1 px-1 text-xs text-[var(--color-text-tertiary)]">
+      <span className="inline-flex items-center gap-1.5 font-medium text-[var(--color-text-secondary)]">
+        <Globe2 size={13} aria-hidden="true" />
+        {sourceName}
+        <span className="text-[var(--color-text-tertiary)]">{statusLabel}</span>
+      </span>
+      <StatusDot label={t('skillCenter.marketplace.loadedCount', { count: String(total) })} />
+      <StatusDot label={`${t('skillCenter.marketplace.safe')} ${safeCount}/${total}`} />
+      <StatusDot label={`${t('skillCenter.marketplace.downloads')} ${compactNumber(totalDownloads)}`} />
+      <StatusDot label={t('skillCenter.marketplace.installedHint', { count: String(installedCount) })} />
+      {loading ? (
+        <span className="inline-flex items-center gap-1 text-[var(--color-text-secondary)]">
+          <span className="h-3 w-3 animate-spin rounded-full border-2 border-[var(--color-brand)] border-t-transparent" />
+          {t('skillCenter.marketplace.loading')}
+        </span>
+      ) : null}
+      {statusMessage ? (
+        <span className="min-w-0 truncate text-[var(--color-text-tertiary)]">{statusMessage}</span>
+      ) : (
+        <span className="min-w-0 truncate text-[var(--color-text-tertiary)]">
+          {t('skillCenter.marketplace.sourcePolicy')} · {t('skillCenter.marketplace.safetyPolicy')}
+        </span>
+      )}
+    </div>
+  )
+}
+
+function StatusDot({ label }: { label: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span className="h-1 w-1 rounded-full bg-[var(--color-border-strong)]" aria-hidden="true" />
+      {label}
+    </span>
+  )
+}
+
+function SourceSwitch({
+  value,
+  onChange,
+}: {
+  value: SkillMarketListSource
+  onChange: (value: SkillMarketListSource) => void
+}) {
+  const t = useTranslation()
+
+  return (
+    <div
+      aria-label={t('skillCenter.marketplace.sourceLabel')}
+      className="inline-flex h-9 shrink-0 items-center rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-1"
+    >
+      {SOURCE_OPTIONS.map((sourceOption) => (
+        <button
+          key={sourceOption}
+          type="button"
+          aria-pressed={value === sourceOption}
+          onClick={() => onChange(sourceOption)}
+          className={[
+            'h-7 rounded px-2.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]',
+            value === sourceOption
+              ? 'bg-[var(--color-surface-selected)] text-[var(--color-text-primary)] shadow-sm'
+              : 'text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]',
+          ].join(' ')}
+        >
+          {t(`skillCenter.marketplace.source.${sourceOption}`)}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function InstalledLibraryHeader({
+  t,
+  selected,
+  installedCount,
+}: {
+  t: TFunction
+  selected: boolean
+  installedCount: number
+}) {
+  return (
+    <section className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3">
+      <div className="flex min-w-0 items-center gap-3">
+        <span className="inline-flex h-9 w-9 items-center justify-center rounded-md bg-[var(--color-primary-fixed)] text-[var(--color-brand)]">
+          <Package size={18} aria-hidden="true" />
+        </span>
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-[var(--color-text-primary)]">
+            {selected ? t('skillCenter.mine.detailTitle') : t('skillCenter.mine.libraryTitle')}
+          </div>
+          <div className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">
+            {t('skillCenter.mine.libraryMeta', { count: String(installedCount) })}
+          </div>
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-2 text-xs text-[var(--color-text-tertiary)]">
+        <span className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-2 py-1">
+          {t('skillCenter.mine.localDirectory')}
+        </span>
+        <span className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-2 py-1">
+          {t('skillCenter.mine.sources')}
+        </span>
+      </div>
+    </section>
   )
 }
 
@@ -298,6 +563,8 @@ function SkillMarketCard({
 }) {
   const t = useTranslation()
   const stats = formatStats(item, t)
+  const sourceLabel = t(`skillCenter.marketplace.source.${item.source}`)
+  const summary = item.summaryZh || item.summary
 
   return (
     <button
@@ -305,40 +572,64 @@ function SkillMarketCard({
       aria-label={item.displayName}
       onClick={onSelect}
       className={[
-        'group flex min-h-[168px] flex-col justify-between rounded-lg border bg-[var(--color-surface)] p-4 text-left transition-colors',
-        'hover:border-[var(--color-border-focus)] hover:bg-[var(--color-surface-hover)]',
+        'group flex min-h-[120px] flex-col rounded-lg border bg-[var(--color-surface)] p-3 text-left transition-colors',
+        'hover:border-[var(--color-border-focus)] hover:bg-[var(--color-surface-hover)] hover:shadow-sm',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]',
-        active ? 'border-[var(--color-border-focus)] bg-[var(--color-surface-selected)]' : 'border-[var(--color-border)]',
+        active ? 'border-[var(--color-border-focus)] bg-[var(--color-surface-selected)] shadow-sm' : 'border-[var(--color-border)]',
       ].join(' ')}
     >
-      <div className="min-w-0">
-        <div className="mb-2 flex items-start justify-between gap-2">
-          <h3 className="min-w-0 truncate text-sm font-semibold text-[var(--color-text-primary)]">
-            {item.displayName}
-          </h3>
-          <TrustBadge state={item.trustState} />
+      <div className="flex items-start gap-2.5">
+        <span className={sourceIconClass(item.source, item.trustState)}>
+          {item.source === 'clawhub' ? <Globe2 size={14} aria-hidden="true" /> : <Package size={14} aria-hidden="true" />}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-start justify-between gap-2">
+            <div className="min-w-0">
+              <h3 className="truncate text-sm font-semibold text-[var(--color-text-primary)]">
+                {item.displayName}
+              </h3>
+              {item.owner || item.category ? (
+                <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-1.5 text-xs text-[var(--color-text-tertiary)]">
+                  {item.owner ? <span className="truncate">@{item.owner}</span> : null}
+                  {item.category ? <span className="truncate">{item.category}</span> : null}
+                </div>
+              ) : null}
+            </div>
+            <ChevronRight
+              size={16}
+              className="mt-0.5 shrink-0 text-[var(--color-text-tertiary)] opacity-50 transition-transform group-hover:translate-x-0.5 group-hover:opacity-100"
+              aria-hidden="true"
+            />
+          </div>
         </div>
-        <p className="line-clamp-3 text-sm leading-5 text-[var(--color-text-secondary)]">
-          {item.summaryZh || item.summary}
-        </p>
       </div>
 
-      <div className="mt-4 flex min-w-0 items-end justify-between gap-3">
-        <div className="min-w-0 text-xs text-[var(--color-text-tertiary)]">
-          <div className="truncate">
-            {item.owner ? `@${item.owner}` : t(`skillCenter.marketplace.source.${item.source}`)}
-          </div>
-          {item.license ? <div className="truncate">{item.license}</div> : null}
-        </div>
-        <div className="flex shrink-0 items-center gap-2 text-xs text-[var(--color-text-tertiary)]">
-          {item.installed ? (
-            <span className="inline-flex items-center gap-1 rounded-md bg-[var(--color-success-container)] px-1.5 py-1 text-[var(--color-success)]">
-              <Check size={12} aria-hidden="true" />
-              {t('skillCenter.marketplace.installedBadge')}
-            </span>
-          ) : null}
-          {stats ? <span className="truncate">{stats}</span> : null}
-        </div>
+      <p className="mt-2 line-clamp-2 min-h-10 text-sm leading-5 text-[var(--color-text-secondary)]">
+        {summary}
+      </p>
+
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        <TrustBadge state={item.trustState} />
+        {item.installed ? (
+          <span className="inline-flex items-center gap-1 rounded-md bg-[var(--color-info-container)] px-2 py-1 text-xs text-[var(--color-info)]">
+            <Check size={12} aria-hidden="true" />
+            {t('skillCenter.marketplace.installedBadge')}
+          </span>
+        ) : null}
+        {item.requiresApiKey ? (
+          <span className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-2 py-1 text-xs text-[var(--color-text-secondary)]">
+            <Lock size={12} aria-hidden="true" />
+            {t('skillCenter.marketplace.requiresApiKey')}
+          </span>
+        ) : null}
+      </div>
+
+      <div className="mt-auto flex min-w-0 items-center justify-between gap-3 pt-2 text-xs text-[var(--color-text-tertiary)]">
+        <span className="inline-flex min-w-0 items-center gap-1.5 truncate">
+          <BadgeCheck size={13} aria-hidden="true" />
+          <span className="truncate">{sourceLabel}</span>
+        </span>
+        {stats ? <span className="shrink-0">{stats}</span> : null}
       </div>
     </button>
   )
@@ -349,128 +640,148 @@ function SkillMarketDetailPanel({
   loading,
   installing,
   onInstall,
+  onOpenInstalled,
   onClose,
 }: {
   detail: SkillMarketDetail | null
   loading: boolean
   installing: boolean
   onInstall: () => void
+  onOpenInstalled: (detail: SkillMarketDetail) => void
   onClose: () => void
 }) {
   const t = useTranslation()
 
   if (loading && !detail) {
-    return (
-      <aside className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)]">
-        <LoadingState label={t('skillCenter.marketplace.detailLoading')} />
-      </aside>
+    return createPortal(
+      <div data-testid="skill-market-detail-layer" className="fixed inset-0 z-50">
+        <button
+          type="button"
+          aria-label={t('skillCenter.marketplace.closeDetail')}
+          onClick={onClose}
+          className="skill-market-detail-scrim absolute inset-0 cursor-default border-0 p-0"
+        />
+        <aside
+          role="dialog"
+          aria-modal="true"
+          aria-label={t('skillCenter.marketplace.selectionTitle')}
+          className="absolute right-0 top-0 flex h-full w-[min(520px,calc(100vw-24px))] flex-col border-l border-[var(--color-border)] bg-[var(--color-surface)] shadow-[var(--shadow-dropdown)]"
+        >
+          <LoadingState label={t('skillCenter.marketplace.detailLoading')} />
+        </aside>
+      </div>,
+      document.body,
     )
   }
 
   if (!detail) {
-    return (
-      <aside className="flex min-h-[320px] items-center justify-center rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface-container-low)] p-6 text-center text-sm text-[var(--color-text-tertiary)]">
-        {t('skillCenter.marketplace.noSelection')}
-      </aside>
+    return createPortal(
+      <div data-testid="skill-market-detail-layer" className="fixed inset-0 z-50">
+        <button
+          type="button"
+          aria-label={t('skillCenter.marketplace.closeDetail')}
+          onClick={onClose}
+          className="skill-market-detail-scrim absolute inset-0 cursor-default border-0 p-0"
+        />
+        <aside
+          role="dialog"
+          aria-modal="true"
+          aria-label={t('skillCenter.marketplace.selectionTitle')}
+          className="absolute right-0 top-0 flex h-full w-[min(520px,calc(100vw-24px))] flex-col border-l border-[var(--color-border)] bg-[var(--color-surface)] p-4 shadow-[var(--shadow-dropdown)]"
+        >
+          <div className="flex items-center gap-2 text-sm font-semibold text-[var(--color-text-primary)]">
+            <ShieldCheck size={17} aria-hidden="true" />
+            {t('skillCenter.marketplace.selectionTitle')}
+          </div>
+          <p className="mt-2 text-sm leading-6 text-[var(--color-text-secondary)]">
+            {t('skillCenter.marketplace.noSelection')}
+          </p>
+          <div className="mt-4 grid gap-2">
+            <DecisionHint
+              icon={<Globe2 size={15} aria-hidden="true" />}
+              title={t('skillCenter.marketplace.hint.sourceTitle')}
+              body={t('skillCenter.marketplace.hint.sourceBody')}
+            />
+            <DecisionHint
+              icon={<ShieldCheck size={15} aria-hidden="true" />}
+              title={t('skillCenter.marketplace.hint.safetyTitle')}
+              body={t('skillCenter.marketplace.hint.safetyBody')}
+            />
+            <DecisionHint
+              icon={<FileText size={15} aria-hidden="true" />}
+              title={t('skillCenter.marketplace.hint.previewTitle')}
+              body={t('skillCenter.marketplace.hint.previewBody')}
+            />
+          </div>
+        </aside>
+      </div>,
+      document.body,
     )
   }
 
   const eligibility = detail.installEligibility
   const installable = eligibility.status === 'installable'
+  const canOpenInstalled = eligibility.status === 'installed'
+  const summary = detail.summaryZh || detail.summary
 
-  return (
-    <aside className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)]">
-      <div className="flex items-start justify-between gap-3 border-b border-[var(--color-border)] px-4 py-3">
-        <div className="min-w-0">
-          <h3 className="truncate text-base font-semibold text-[var(--color-text-primary)]">
-            {detail.displayName}
-          </h3>
-          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[var(--color-text-tertiary)]">
-            <span>{t(`skillCenter.marketplace.source.${detail.source}`)}</span>
-            {detail.owner ? <span>@{detail.owner}</span> : null}
-            {detail.version ? <span>{detail.version}</span> : null}
-          </div>
-        </div>
-        <button
-          type="button"
-          aria-label={t('skillCenter.marketplace.closeDetail')}
-          onClick={onClose}
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
-        >
-          <X size={16} aria-hidden="true" />
-        </button>
-      </div>
-
-      <div className="flex flex-col gap-4 p-4">
-        <p className="text-sm leading-6 text-[var(--color-text-secondary)]">
-          {detail.summaryZh || detail.summary}
-        </p>
-
-        <div className="flex flex-wrap gap-2">
-          <TrustBadge state={detail.trustState} />
-          <EligibilityBadge eligibility={eligibility} />
-          {detail.requiresApiKey ? (
-            <span className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] px-2 py-1 text-xs text-[var(--color-text-secondary)]">
-              <Lock size={12} aria-hidden="true" />
-              {t('skillCenter.marketplace.requiresApiKey')}
-            </span>
-          ) : null}
-        </div>
-
-        {detail.trustSummary ? (
-          <div className="rounded-md bg-[var(--color-surface-container-low)] px-3 py-2 text-xs leading-5 text-[var(--color-text-secondary)]">
-            {detail.trustSummary}
-          </div>
-        ) : null}
-
-        <dl className="grid grid-cols-2 gap-2 text-xs">
-          <MetaItem label={t('skillCenter.marketplace.license')} value={detail.license || '-'} />
-          <MetaItem label={t('skillCenter.marketplace.files')} value={String(detail.files.length)} />
-          <MetaItem label={t('skillCenter.marketplace.downloads')} value={formatNumber(detail.downloads)} />
-          <MetaItem label={t('skillCenter.marketplace.stars')} value={formatNumber(detail.stars)} />
-        </dl>
-
-        {detail.riskLabels.length > 0 ? (
-          <div>
-            <div className="mb-2 text-xs font-medium text-[var(--color-text-secondary)]">
-              {t('skillCenter.marketplace.riskLabels')}
+  return createPortal(
+    <div data-testid="skill-market-detail-layer" className="fixed inset-0 z-50">
+      <button
+        type="button"
+        aria-label={t('skillCenter.marketplace.closeDetail')}
+        onClick={onClose}
+        className="skill-market-detail-scrim absolute inset-0 cursor-default border-0 p-0"
+      />
+      <aside
+        role="dialog"
+        aria-modal="true"
+        aria-label={detail.displayName}
+        className="absolute right-0 top-0 flex h-full w-[min(520px,calc(100vw-24px))] flex-col border-l border-[var(--color-border)] bg-[var(--color-surface)] shadow-[var(--shadow-dropdown)]"
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-[var(--color-border)] px-5 py-4">
+          <div className="min-w-0">
+            <div className="mb-2 flex flex-wrap gap-1.5">
+              <TrustBadge state={detail.trustState} />
+              <EligibilityBadge eligibility={eligibility} />
             </div>
-            <div className="flex flex-wrap gap-1.5">
-              {detail.riskLabels.map((label) => (
-                <span
-                  key={label}
-                  className="rounded-md bg-[var(--color-warning-container)] px-2 py-1 text-xs text-[var(--color-warning)]"
-                >
-                  {t(`skillCenter.marketplace.risk.${label}`)}
-                </span>
-              ))}
+            <h3 className="line-clamp-2 text-lg font-semibold leading-6 text-[var(--color-text-primary)]">
+              {detail.displayName}
+            </h3>
+            <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[var(--color-text-tertiary)]">
+              <span>{t(`skillCenter.marketplace.source.${detail.source}`)}</span>
+              {detail.owner ? <span>@{detail.owner}</span> : null}
+              {detail.version ? <span>{detail.version}</span> : null}
             </div>
           </div>
-        ) : null}
-
-        {detail.entryPreview ? (
-          <div>
-            <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-[var(--color-text-secondary)]">
-              <FileText size={13} aria-hidden="true" />
-              {t('skillCenter.marketplace.entryPreview')}
-            </div>
-            <pre className="max-h-40 overflow-auto rounded-md bg-[var(--color-surface-container-low)] p-3 text-xs leading-5 text-[var(--color-text-secondary)]">
-              {detail.entryPreview}
-            </pre>
-          </div>
-        ) : null}
-
-        <div className="flex flex-col gap-2 border-t border-[var(--color-border)] pt-4">
           <button
             type="button"
-            onClick={onInstall}
-            disabled={!installable || installing}
-            className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-[var(--color-brand)] px-4 text-sm font-semibold text-white transition-colors hover:bg-[var(--color-brand-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed disabled:bg-[var(--color-surface-container-high)] disabled:text-[var(--color-text-tertiary)]"
+            aria-label={t('skillCenter.marketplace.closeDetail')}
+            onClick={onClose}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
           >
-            <Download size={15} aria-hidden="true" />
-            {installing ? t('skillCenter.marketplace.installing') : installLabel(t, eligibility)}
+            <X size={16} aria-hidden="true" />
           </button>
-          <div className="flex flex-wrap gap-3 text-xs">
+        </div>
+
+        <div className="border-b border-[var(--color-border)] bg-[var(--color-surface)] p-5">
+          <button
+            type="button"
+            onClick={() => (canOpenInstalled ? onOpenInstalled(detail) : onInstall())}
+            disabled={(!installable && !canOpenInstalled) || installing}
+            className={`inline-flex h-10 w-full items-center justify-center gap-2 rounded-md px-4 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed disabled:bg-[var(--color-surface-container-high)] disabled:text-[var(--color-text-tertiary)] ${
+              canOpenInstalled
+                ? 'border border-[var(--color-success)]/25 bg-[var(--color-success-container)] text-[var(--color-success)] hover:border-[var(--color-success)]/35 hover:bg-[var(--color-success-container)]'
+                : 'bg-[var(--color-brand)] text-[var(--color-on-primary)] hover:bg-[var(--color-brand-hover)]'
+            }`}
+          >
+            {canOpenInstalled ? <Check size={15} aria-hidden="true" /> : <Download size={15} aria-hidden="true" />}
+            {installing
+              ? t('skillCenter.marketplace.installing')
+              : canOpenInstalled
+                ? t('skillCenter.marketplace.viewInstalled')
+                : installLabel(t, eligibility)}
+          </button>
+          <div className="mt-3 flex flex-wrap gap-3 text-xs">
             <a
               href={detail.canonicalUrl}
               target="_blank"
@@ -493,8 +804,157 @@ function SkillMarketDetailPanel({
             ) : null}
           </div>
         </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-5">
+          <p className="text-sm leading-6 text-[var(--color-text-secondary)]">
+            {summary}
+          </p>
+
+          {detail.trustSummary ? (
+            <div className="mt-4 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-2 text-xs leading-5 text-[var(--color-text-secondary)]">
+              {detail.trustSummary}
+            </div>
+          ) : null}
+
+          {eligibility.status === 'blocked' || eligibility.status === 'conflict' ? (
+            <div className="mt-4 rounded-md border border-[var(--color-warning)]/30 bg-[var(--color-warning-container)] px-3 py-2 text-xs leading-5 text-[var(--color-warning)]">
+              {eligibilityMessage(t, eligibility)}
+            </div>
+          ) : null}
+
+          <dl className="mt-4 grid grid-cols-2 gap-2 text-xs">
+            <MetaItem icon={<FileText size={13} aria-hidden="true" />} label={t('skillCenter.marketplace.files')} value={String(detail.files.length)} />
+            <MetaItem icon={<Download size={13} aria-hidden="true" />} label={t('skillCenter.marketplace.downloads')} value={formatNumber(detail.downloads)} />
+            <MetaItem icon={<Star size={13} aria-hidden="true" />} label={t('skillCenter.marketplace.stars')} value={formatNumber(detail.stars)} />
+            <MetaItem icon={<Clock3 size={13} aria-hidden="true" />} label={t('skillCenter.marketplace.license')} value={detail.license || '-'} />
+          </dl>
+
+          {detail.riskLabels.length > 0 ? (
+            <div className="mt-4">
+              <div className="mb-2 text-xs font-medium text-[var(--color-text-secondary)]">
+                {t('skillCenter.marketplace.riskLabels')}
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {detail.riskLabels.map((label) => (
+                  <span
+                    key={label}
+                    className="rounded-md bg-[var(--color-warning-container)] px-2 py-1 text-xs text-[var(--color-warning)]"
+                  >
+                    {t(`skillCenter.marketplace.risk.${label}`)}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="mt-4 flex items-center gap-2 rounded-md bg-[var(--color-success-container)] px-3 py-2 text-xs text-[var(--color-success)]">
+              <ShieldCheck size={14} aria-hidden="true" />
+              {t('skillCenter.marketplace.noRiskLabels')}
+            </div>
+          )}
+
+          {detail.requiresApiKey ? (
+            <div className="mt-4 flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-2 text-xs text-[var(--color-text-secondary)]">
+              <Lock size={14} aria-hidden="true" />
+              {t('skillCenter.marketplace.requiresApiKey')}
+            </div>
+          ) : null}
+
+          <FilePreviewSection detail={detail} />
+        </div>
+      </aside>
+    </div>,
+    document.body,
+  )
+}
+
+function FilePreviewSection({ detail }: { detail: SkillMarketDetail }) {
+  const t = useTranslation()
+  const previews = detail.filePreviews?.length
+    ? detail.filePreviews
+    : detail.entryPreview
+      ? [{
+          path: 'SKILL.md',
+          content: detail.entryPreview,
+          language: 'markdown',
+        }]
+      : []
+
+  if (previews.length === 0) {
+    if (!detail.previewUnavailableReason) {
+      return null
+    }
+    return (
+      <div className="mt-4 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-2">
+        <div className="flex items-center gap-1.5 text-xs font-medium text-[var(--color-text-secondary)]">
+          <FileText size={13} aria-hidden="true" />
+          {t('skillCenter.marketplace.previewUnavailable')}
+        </div>
+        <p className="mt-1 text-xs leading-5 text-[var(--color-text-tertiary)]">
+          {formatPreviewUnavailable(t, detail.previewUnavailableReason)}
+        </p>
       </div>
-    </aside>
+    )
+  }
+
+  return (
+    <div className="mt-4">
+      <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-[var(--color-text-secondary)]">
+        <FileText size={13} aria-hidden="true" />
+        {t('skillCenter.marketplace.filePreview')}
+      </div>
+      <div className="space-y-3">
+        {previews.map((preview) => (
+          <section
+            key={preview.path}
+            className="overflow-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]"
+          >
+            <div className="flex min-h-9 items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 text-xs">
+              <span className="min-w-0 flex-1 truncate font-medium text-[var(--color-text-primary)]">
+                {preview.path}
+              </span>
+              {preview.language ? (
+                <span className="shrink-0 rounded bg-[var(--color-surface-container-high)] px-1.5 py-0.5 text-[11px] text-[var(--color-text-tertiary)]">
+                  {preview.language}
+                </span>
+              ) : null}
+              {typeof preview.size === 'number' ? (
+                <span className="shrink-0 text-[11px] text-[var(--color-text-tertiary)]">
+                  {formatBytes(preview.size)}
+                </span>
+              ) : null}
+              {preview.truncated ? (
+                <span className="shrink-0 rounded bg-[var(--color-warning-container)] px-1.5 py-0.5 text-[11px] text-[var(--color-warning)]">
+                  {t('skillCenter.marketplace.previewTruncated')}
+                </span>
+              ) : null}
+            </div>
+            <pre className="max-h-72 overflow-auto p-3 text-xs leading-5 text-[var(--color-text-secondary)]">
+              <code>{preview.content}</code>
+            </pre>
+          </section>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function DecisionHint({
+  icon,
+  title,
+  body,
+}: {
+  icon: ReactNode
+  title: string
+  body: string
+}) {
+  return (
+    <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-2">
+      <div className="flex items-center gap-2 text-xs font-medium text-[var(--color-text-primary)]">
+        <span className="text-[var(--color-text-secondary)]">{icon}</span>
+        {title}
+      </div>
+      <p className="mt-1 text-xs leading-5 text-[var(--color-text-tertiary)]">{body}</p>
+    </div>
   )
 }
 
@@ -503,21 +963,24 @@ function SelectField({
   value,
   options,
   onChange,
+  compact = false,
 }: {
   label: string
   value: string
   options: Array<{ value: string; label: string }>
   onChange: (value: string) => void
+  compact?: boolean
 }) {
   return (
-    <label className="min-w-0">
-      <span className="mb-1.5 block text-xs font-medium text-[var(--color-text-secondary)]">
+    <label className={compact ? 'min-w-[132px]' : 'min-w-0'}>
+      <span className={compact ? 'sr-only' : 'mb-1.5 block text-xs font-medium text-[var(--color-text-secondary)]'}>
         {label}
       </span>
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="h-10 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm text-[var(--color-text-primary)] outline-none transition-colors focus:border-[var(--color-border-focus)] focus:shadow-[var(--shadow-focus-ring)]"
+        aria-label={compact ? label : undefined}
+        className="h-9 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-3 text-sm text-[var(--color-text-primary)] outline-none transition-colors focus:border-[var(--color-border-focus)] focus:shadow-[var(--shadow-focus-ring)]"
       >
         {options.map((option) => (
           <option key={option.value} value={option.value}>
@@ -529,11 +992,22 @@ function SelectField({
   )
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function MetaItem({
+  icon,
+  label,
+  value,
+}: {
+  icon: ReactNode
+  label: string
+  value: string
+}) {
   return (
-    <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-2">
-      <div className="text-[11px] text-[var(--color-text-tertiary)]">{label}</div>
-      <div className="mt-0.5 text-sm font-semibold text-[var(--color-text-primary)]">{value}</div>
+    <div className="rounded-md bg-[var(--color-surface-container-low)] px-3 py-2">
+      <dt className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-tertiary)]">
+        {icon}
+        {label}
+      </dt>
+      <dd className="mt-1 truncate text-[var(--color-text-primary)]">{value}</dd>
     </div>
   )
 }
@@ -547,7 +1021,7 @@ function TrustBadge({ state }: { state: SkillMarketTrustState }) {
     : blocked
       ? 'bg-[var(--color-error-container)] text-[var(--color-error)]'
       : 'bg-[var(--color-warning-container)] text-[var(--color-warning)]'
-  const Icon = safe ? ShieldCheck : blocked ? AlertTriangle : AlertTriangle
+  const Icon = safe ? ShieldCheck : AlertTriangle
 
   return (
     <span className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs ${className}`}>
@@ -574,35 +1048,44 @@ function EligibilityBadge({ eligibility }: { eligibility: SkillMarketInstallElig
   )
 }
 
-function MetaItem({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-md bg-[var(--color-surface-container-low)] px-3 py-2">
-      <dt className="text-[11px] text-[var(--color-text-tertiary)]">{label}</dt>
-      <dd className="mt-0.5 truncate text-[var(--color-text-primary)]">{value}</dd>
-    </div>
-  )
-}
-
 function LoadingState({ label }: { label: string }) {
   return (
-    <div className="flex min-h-[220px] items-center justify-center gap-2 text-sm text-[var(--color-text-secondary)]">
-      <div className="h-4 w-4 animate-spin rounded-full border-2 border-[var(--color-brand)] border-t-transparent" />
+    <div className="flex min-h-[260px] items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-6 py-8 text-sm text-[var(--color-text-secondary)]">
+      <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-[var(--color-brand)] border-t-transparent" />
       {label}
     </div>
   )
 }
 
-function EmptyState({ label }: { label: string }) {
+function EmptyState({
+  icon,
+  label,
+  hint,
+}: {
+  icon: ReactNode
+  label: string
+  hint: string
+}) {
   return (
-    <div className="flex min-h-[220px] items-center justify-center rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface-container-low)] p-6 text-sm text-[var(--color-text-tertiary)]">
-      {label}
+    <div className="flex min-h-[260px] items-center justify-center rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface)] p-6 text-center">
+      <div className="max-w-sm">
+        <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-md bg-[var(--color-surface-container-low)] text-[var(--color-text-tertiary)]">
+          {icon}
+        </div>
+        <p className="mt-3 text-sm font-medium text-[var(--color-text-secondary)]">
+          {label}
+        </p>
+        <p className="mt-1 text-xs leading-5 text-[var(--color-text-tertiary)]">
+          {hint}
+        </p>
+      </div>
     </div>
   )
 }
 
 function tabClass(active: boolean) {
   return [
-    'min-w-[6rem] rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
+    'inline-flex min-w-[6rem] items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]',
     active
       ? 'bg-[var(--color-surface)] text-[var(--color-text-primary)] shadow-sm'
@@ -610,15 +1093,46 @@ function tabClass(active: boolean) {
   ].join(' ')
 }
 
-function formatStats(item: SkillMarketItem, t: ReturnType<typeof useTranslation>): string {
+function marketFilterClass(active: boolean) {
+  return [
+    'h-9 rounded-md px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]',
+    active
+      ? 'bg-[var(--color-text-primary)] text-[var(--color-surface)]'
+      : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]',
+  ].join(' ')
+}
+
+function sourceIconClass(source: SkillMarketSource, trustState: SkillMarketTrustState) {
+  const safe = TRUST_SAFE.includes(trustState)
+  return [
+    'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md',
+    safe
+      ? 'bg-[var(--color-success-container)] text-[var(--color-success)]'
+      : source === 'clawhub'
+      ? 'bg-[var(--color-primary-fixed)] text-[var(--color-brand)]'
+      : 'bg-[var(--color-info-container)] text-[var(--color-info)]',
+  ].join(' ')
+}
+
+function matchesMarketFilter(item: SkillMarketItem, filter: MarketFilter) {
+  if (filter === 'safe') return TRUST_SAFE.includes(item.trustState)
+  if (filter === 'installed') return item.installed
+  if (filter === 'apiKey') return !!item.requiresApiKey
+  if (filter === 'popular') {
+    return (item.downloads ?? item.installs ?? item.stars ?? 0) >= 1000
+  }
+  return true
+}
+
+function formatStats(item: SkillMarketItem, t: TFunction): string {
   if (typeof item.downloads === 'number') {
-    return `${formatNumber(item.downloads)} ${t('skillCenter.marketplace.downloads')}`
+    return `${compactNumber(item.downloads)} ${t('skillCenter.marketplace.downloads')}`
   }
   if (typeof item.installs === 'number') {
-    return `${formatNumber(item.installs)} ${t('skillCenter.marketplace.sort.installs')}`
+    return `${compactNumber(item.installs)} ${t('skillCenter.marketplace.sort.installs')}`
   }
   if (typeof item.stars === 'number') {
-    return `${formatNumber(item.stars)} ${t('skillCenter.marketplace.stars')}`
+    return `${compactNumber(item.stars)} ${t('skillCenter.marketplace.stars')}`
   }
   return ''
 }
@@ -628,12 +1142,59 @@ function formatNumber(value: number | undefined): string {
   return new Intl.NumberFormat().format(value)
 }
 
+function compactNumber(value: number | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '-'
+  return new Intl.NumberFormat(undefined, {
+    notation: 'compact',
+    maximumFractionDigits: 1,
+  }).format(value)
+}
+
+function formatMarketError(t: TFunction, error: string): string {
+  if (/failed to fetch/i.test(error) || /network/i.test(error)) {
+    return t('skillCenter.marketplace.networkError')
+  }
+  return error
+}
+
+function formatPreviewUnavailable(t: TFunction, reason: string): string {
+  if (/SkillHub does not expose/i.test(reason)) {
+    return t('skillCenter.marketplace.previewUnavailable.skillhub')
+  }
+  if (/file list/i.test(reason)) {
+    return t('skillCenter.marketplace.previewUnavailable.fileList')
+  }
+  if (/package metadata|full detail/i.test(reason)) {
+    return t('skillCenter.marketplace.previewUnavailable.metadata')
+  }
+  if (/No small text files/i.test(reason)) {
+    return t('skillCenter.marketplace.previewUnavailable.noText')
+  }
+  return reason
+}
+
 function installLabel(
-  t: ReturnType<typeof useTranslation>,
+  t: TFunction,
   eligibility: SkillMarketInstallEligibility,
 ): string {
   if (eligibility.status === 'installable') return t('skillCenter.marketplace.install')
   if (eligibility.status === 'installed') return t('skillCenter.marketplace.installedAction')
   if (eligibility.status === 'conflict') return t('skillCenter.marketplace.conflictAction')
   return t('skillCenter.marketplace.blockedAction')
+}
+
+function eligibilityMessage(
+  t: TFunction,
+  eligibility: SkillMarketInstallEligibility,
+): string {
+  if (eligibility.status === 'conflict') {
+    return t('skillCenter.marketplace.conflictReason', { path: eligibility.targetPath })
+  }
+  if (eligibility.status === 'blocked') {
+    if (eligibility.reason === 'Full package safety scan is required before install.') {
+      return t('skillCenter.marketplace.blockedReason.scanRequired')
+    }
+    return eligibility.reason
+  }
+  return ''
 }

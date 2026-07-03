@@ -47,6 +47,15 @@ export type SkillMarketFile = {
   path: string
   size?: number
   sha256?: string
+  contentType?: string | null
+}
+
+export type SkillMarketFilePreview = {
+  path: string
+  content: string
+  language?: string
+  size?: number
+  truncated?: boolean
 }
 
 export type SkillMarketInstallEligibility =
@@ -57,7 +66,9 @@ export type SkillMarketInstallEligibility =
 
 export type SkillMarketDetail = SkillMarketItem & {
   files: SkillMarketFile[]
+  filePreviews?: SkillMarketFilePreview[]
   entryPreview?: string
+  previewUnavailableReason?: string
   riskLabels: SkillMarketRiskLabel[]
   installEligibility: SkillMarketInstallEligibility
 }

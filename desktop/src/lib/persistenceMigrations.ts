@@ -20,6 +20,8 @@ const SESSION_RUNTIME_STORAGE_KEY = 'cc-haha-session-runtime'
 const THEME_STORAGE_KEY = 'cc-haha-theme'
 const LOCALE_STORAGE_KEY = 'cc-haha-locale'
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'max']
+const PERSISTED_SPECIAL_TAB_TYPES = ['settings', 'scheduled', 'skill-center', 'traces'] as const
+const SUPPORTED_LOCALES = ['en', 'zh', 'zh-TW', 'jp', 'kr']
 
 function readJson(storage: StorageLike, key: string): unknown {
   const raw = storage.getItem(key)
@@ -29,6 +31,10 @@ function readJson(storage: StorageLike, key: string): unknown {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function isPersistedSpecialTabType(value: unknown): value is (typeof PERSISTED_SPECIAL_TAB_TYPES)[number] {
+  return typeof value === 'string' && (PERSISTED_SPECIAL_TAB_TYPES as readonly string[]).includes(value)
 }
 
 function writeJson(storage: StorageLike, key: string, value: unknown): void {
@@ -53,7 +59,9 @@ function migrateTabs(storage: StorageLike, report: DesktopMigrationReport): void
       .map((tab) => ({
         sessionId: tab.sessionId as string,
         title: tab.title as string,
-        type: tab.type === 'settings' || tab.type === 'scheduled' ? tab.type : 'session',
+        type: isPersistedSpecialTabType(tab.type)
+          ? tab.type
+          : 'session',
       }))
     const activeTabId =
       isRecord(parsed) &&
@@ -174,7 +182,7 @@ export function runDesktopPersistenceMigrations(storage: StorageLike | null = ge
   runMigrationStep(report, TAB_STORAGE_KEY, () => migrateTabs(storage, report))
   runMigrationStep(report, SESSION_RUNTIME_STORAGE_KEY, () => migrateSessionRuntime(storage, report))
   runMigrationStep(report, THEME_STORAGE_KEY, () => normalizeEnumKey(storage, THEME_STORAGE_KEY, [...THEME_MODES], report))
-  runMigrationStep(report, LOCALE_STORAGE_KEY, () => normalizeEnumKey(storage, LOCALE_STORAGE_KEY, ['zh', 'en'], report))
+  runMigrationStep(report, LOCALE_STORAGE_KEY, () => normalizeEnumKey(storage, LOCALE_STORAGE_KEY, SUPPORTED_LOCALES, report))
   runMigrationStep(report, APP_ZOOM_STORAGE_KEY, () => normalizeAppZoomKey(storage, report))
   try {
     storage.setItem(DESKTOP_PERSISTENCE_VERSION_KEY, String(CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION))

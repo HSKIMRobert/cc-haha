@@ -24,6 +24,74 @@ export const CLAWHUB_SCAN_RESPONSE = {
   sha256: 'a'.repeat(64),
 }
 
+export const CLAWHUB_DETAIL_RESPONSE = {
+  skill: {
+    slug: 'skill-vetter',
+    displayName: 'Skill Vetter',
+    summary: 'Security-first skill vetting for AI agents.',
+    description: '---\nname: skill-vetter\nversion: 1.0.0\n---\n# Skill Vetter',
+    topics: ['GitHub', 'Permission'],
+    tags: { latest: '1.0.0' },
+    stats: { downloads: 260960, installs: 11990, stars: 1248 },
+  },
+  latestVersion: { version: '1.0.0', license: 'Apache-2.0' },
+  owner: { handle: 'spclaudehome', displayName: 'spclaudehome' },
+}
+
+export const CLAWHUB_NESTED_SCAN_RESPONSE = {
+  skill: {
+    slug: 'skill-vetter',
+    displayName: 'Skill Vetter',
+  },
+  version: {
+    version: '1.0.0',
+  },
+  security: {
+    status: 'clean',
+    hasWarnings: true,
+    hasScanResult: true,
+    sha256hash: 'b'.repeat(64),
+    scanners: {
+      skillspector: { status: 'clean', normalizedStatus: 'clean' },
+      llm: {
+        status: 'clean',
+        normalizedStatus: 'clean',
+        summary: 'This is a non-executable checklist for reviewing other skills.',
+      },
+    },
+  },
+}
+
+export const CLAWHUB_VERSION_RESPONSE = {
+  skill: {
+    slug: 'skill-vetter',
+    displayName: 'Skill Vetter',
+  },
+  version: {
+    version: '1.0.0',
+    files: [
+      {
+        path: 'SKILL.md',
+        size: 4561,
+        sha256: 'e8eb7583355c2ae78a79187dca6a1ec448d9c8360e91652871392179f7ffb8bf',
+        contentType: 'text/markdown',
+      },
+      {
+        path: 'scripts/audit.py',
+        size: 320,
+        sha256: 'd'.repeat(64),
+        contentType: 'text/x-python',
+      },
+      {
+        path: 'assets/logo.png',
+        size: 1024,
+        sha256: 'e'.repeat(64),
+        contentType: 'image/png',
+      },
+    ],
+  },
+}
+
 export const SKILLHUB_TOP_SKILLS_RESPONSE = {
   code: 0,
   data: {
