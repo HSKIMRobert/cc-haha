@@ -27,7 +27,7 @@ import { ChatInput } from '../components/chat/ChatInput'
 import { ComputerUsePermissionModal } from '../components/chat/ComputerUsePermissionModal'
 import { WorkbenchPanel } from '../components/workbench/WorkbenchPanel'
 import { SessionActivityPanel } from '../components/activity/SessionActivityPanel'
-import { buildSessionActivityModel } from '../components/activity/sessionActivityModel'
+import { buildSessionActivityModel, hasVisibleSessionActivity } from '../components/activity/sessionActivityModel'
 import { TerminalSettings } from './TerminalSettings'
 import type { SessionListItem } from '../types/session'
 import type { ActiveGoalState, TokenUsage } from '../types/chat'
@@ -402,11 +402,11 @@ export function ActiveSession() {
     hasRunningBackgroundTasks
   const totalTokens = getTokenUsageTotal(tokenUsage)
   const activityTeamMembers = useMemo(() => {
-    if (!activeTeam) return []
+    if (!activeTeam || activeTeam.leadSessionId !== activeTabId) return []
     return activeTeam.members.filter((member) =>
       !activeTeam.leadAgentId || member.agentId !== activeTeam.leadAgentId
     )
-  }, [activeTeam])
+  }, [activeTabId, activeTeam])
 
   useEffect(() => {
     if (!activeTabId) return
@@ -441,6 +441,13 @@ export function ActiveSession() {
     messages,
     trackedTaskSessionId,
   ])
+  const hasVisibleActivity = activityModel ? hasVisibleSessionActivity(activityModel) : false
+
+  useEffect(() => {
+    if (!activeTabId || !isActivityPanelOpen || hasVisibleActivity) return
+    closeActivityPanel(activeTabId)
+  }, [activeTabId, closeActivityPanel, hasVisibleActivity, isActivityPanelOpen])
+
   const handleOpenSubagentRun = useCallback((payload: { sessionId: string; toolUseId: string; title: string }) => {
     useTabStore.getState().openSubagentTab(payload.sessionId, payload.toolUseId, payload.title)
   }, [])
@@ -638,7 +645,7 @@ export function ActiveSession() {
             </>
           )}
 
-          {activityModel && isMobileLayout && !isMemberSession && isSessionTabState(activeTabId, activeTabType) ? (
+          {activityModel && hasVisibleActivity && isMobileLayout && !isMemberSession && isSessionTabState(activeTabId, activeTabType) ? (
             <SessionActivityPanel
               model={activityModel}
               open={isActivityPanelOpen}
@@ -683,7 +690,7 @@ export function ActiveSession() {
           ) : null}
         </div>
 
-        {activityModel && !isMobileLayout && !isMemberSession && isSessionTabState(activeTabId, activeTabType) ? (
+        {activityModel && hasVisibleActivity && !isMobileLayout && !isMemberSession && isSessionTabState(activeTabId, activeTabType) ? (
           <SessionActivityPanel
             model={activityModel}
             open={isActivityPanelOpen}

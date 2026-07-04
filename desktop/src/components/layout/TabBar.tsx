@@ -18,6 +18,7 @@ import { isPlaceholderSessionTitle } from '../../lib/sessionTitle'
 import { useWorkspacePanelStore } from '../../stores/workspacePanelStore'
 import { useTerminalPanelStore } from '../../stores/terminalPanelStore'
 import { useCLITaskStore } from '../../stores/cliTaskStore'
+import { useTeamStore } from '../../stores/teamStore'
 import { useTranslation } from '../../i18n'
 import { getDesktopHost } from '../../lib/desktopHost'
 import { hasRunningBackgroundTasks } from '../../lib/backgroundTasks'
@@ -25,7 +26,7 @@ import { WindowControls, showWindowControls } from './WindowControls'
 import { OpenProjectMenu } from './OpenProjectMenu'
 import { Folder, FolderOpen, SquareTerminal } from 'lucide-react'
 import { ActionDialog } from '../shared/ActionDialog'
-import { buildSessionActivityModel } from '../activity/sessionActivityModel'
+import { buildSessionActivityModel, hasVisibleSessionActivity } from '../activity/sessionActivityModel'
 import { SessionActivityButton } from '../activity/SessionActivityButton'
 import { useActivityPanelStore } from '../../stores/activityPanelStore'
 
@@ -110,12 +111,23 @@ export function TabBar() {
     () => new Set(dismissedBackgroundTaskKeyList),
     [dismissedBackgroundTaskKeyList],
   )
-  const activityBadgeCount = useChatStore((state) => {
-    if (!activeTabId || !isActiveSessionTab) return 0
+  const activityTeamMembers = useTeamStore(useShallow((state) => {
+    const activeTeam = state.activeTeam
+    if (!activeTabId || !activeTeam || activeTeam.leadSessionId !== activeTabId) {
+      return []
+    }
+    return activeTeam.members.filter((member) =>
+      !activeTeam.leadAgentId || member.agentId !== activeTeam.leadAgentId
+    )
+  }))
+  const activityState = useChatStore(useShallow((state) => {
+    if (!activeTabId || !isActiveSessionTab) {
+      return { badgeCount: 0, hasVisibleActivity: false }
+    }
     const sessionState = state.sessions[activeTabId]
     const includeCliTasks = cliTasksSessionId === activeTabId
 
-    return buildSessionActivityModel({
+    const model = buildSessionActivityModel({
       sessionId: activeTabId,
       messages: sessionState?.messages ?? [],
       tasks: includeCliTasks ? cliTasks : [],
@@ -123,8 +135,15 @@ export function TabBar() {
       backgroundTasks: Object.values(sessionState?.backgroundAgentTasks ?? {}),
       dismissedBackgroundTaskKeys,
       agentNotifications: Object.values(sessionState?.agentTaskNotifications ?? {}),
-    }).badgeCount
-  })
+      teamMembers: activityTeamMembers,
+    })
+    return {
+      badgeCount: model.badgeCount,
+      hasVisibleActivity: hasVisibleSessionActivity(model),
+    }
+  }))
+  const showActivityButton = activeTabId && activityState.hasVisibleActivity
+  const activityBadgeCount = activityState.badgeCount
 
   const moveTab = useTabStore((s) => s.moveTab)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -415,7 +434,7 @@ export function TabBar() {
       </div>
 
       <div className="flex shrink-0 items-center gap-1 border-l border-[var(--color-border)]/70 px-2">
-        {isActiveSessionTab && activeTabId && (
+        {showActivityButton && activeTabId && (
           <SessionActivityButton sessionId={activeTabId} badgeCount={activityBadgeCount} />
         )}
         {isDesktopRuntime && isActiveSessionTab && (

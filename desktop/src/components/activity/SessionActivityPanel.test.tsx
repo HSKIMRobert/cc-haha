@@ -101,10 +101,15 @@ function model(overrides: Partial<SessionActivityModel> = {}): SessionActivityMo
 describe('SessionActivityPanel', () => {
   afterEach(cleanup)
 
-  it('renders sections, rows, and empty states', () => {
+  it('renders populated tasks section without empty visible section labels', () => {
     render(
       <SessionActivityPanel
-        model={model()}
+        model={model({
+          sections: {
+            ...model().sections,
+            subagents: { id: 'subagents', title: 'SubAgents', emptyLabel: 'No SubAgents', rows: [] },
+          },
+        })}
         open
         onClose={vi.fn()}
         onOpenSubagent={vi.fn()}
@@ -118,15 +123,14 @@ describe('SessionActivityPanel', () => {
     expect(screen.getByText('Add panel coverage')).toHaveAttribute('title', 'Add panel coverage')
     expect(screen.getByLabelText('Task in progress')).toBeInTheDocument()
     expect(screen.queryByText('In progress')).not.toBeInTheDocument()
-    expect(screen.getByText('Team')).toBeInTheDocument()
-    expect(screen.getByText('No team members')).toBeInTheDocument()
-    expect(screen.getByText('Background Tasks')).toBeInTheDocument()
-    expect(screen.getByText('SubAgents')).toBeInTheDocument()
-    expect(screen.getByText('Kuhn')).toBeInTheDocument()
-    expect(screen.getByText('Running')).toBeInTheDocument()
-    expect(screen.getByText('Sources')).toBeInTheDocument()
-    expect(screen.getByText('No background tasks')).toBeInTheDocument()
-    expect(screen.getByText('No sources')).toBeInTheDocument()
+    expect(screen.queryByText('Team')).not.toBeInTheDocument()
+    expect(screen.queryByText('Background Tasks')).not.toBeInTheDocument()
+    expect(screen.queryByText('SubAgents')).not.toBeInTheDocument()
+    expect(screen.queryByText('Sources')).not.toBeInTheDocument()
+    expect(screen.queryByText('No team members')).not.toBeInTheDocument()
+    expect(screen.queryByText('No background tasks')).not.toBeInTheDocument()
+    expect(screen.queryByText('No SubAgents')).not.toBeInTheDocument()
+    expect(screen.queryByText('No sources')).not.toBeInTheDocument()
   })
 
   it('renders task rows as checklist markers instead of status chips', () => {
@@ -386,11 +390,12 @@ describe('SessionActivityPanel', () => {
     )
 
     expect(screen.getByTestId('session-activity-panel')).toHaveAttribute('data-placement', 'rail')
-    expect(screen.getByTestId('session-activity-panel')).toHaveClass('my-3')
-    expect(screen.getByTestId('session-activity-panel')).toHaveClass('mr-3')
-    expect(screen.getByTestId('session-activity-panel')).toHaveClass('rounded-xl')
+    expect(screen.getByTestId('session-activity-panel')).toHaveClass('my-4')
+    expect(screen.getByTestId('session-activity-panel')).toHaveClass('mr-4')
+    expect(screen.getByTestId('session-activity-panel')).toHaveClass('w-[340px]')
+    expect(screen.getByTestId('session-activity-panel')).toHaveClass('rounded-[24px]')
     expect(screen.getByTestId('session-activity-panel')).toHaveClass('self-start')
-    expect(screen.getByTestId('session-activity-panel')).toHaveClass('max-h-[min(480px,calc(100vh-88px))]')
+    expect(screen.getByTestId('session-activity-panel')).toHaveClass('max-h-[min(480px,calc(100vh-96px))]')
     expect(screen.getByTestId('session-activity-panel')).not.toHaveClass('h-[calc(100%-24px)]')
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Outside' }))
 
@@ -455,10 +460,10 @@ describe('SessionActivityPanel', () => {
     const backgroundSection = document.querySelector('section[aria-label="Background Tasks"]')
     const subagentsSection = document.querySelector('section[aria-label="SubAgents"]')
 
-    expect(tasksSection?.querySelector('.max-h-40.overflow-y-auto')).toBeInTheDocument()
-    expect(teamSection?.querySelector('.max-h-32.overflow-y-auto')).toBeInTheDocument()
-    expect(backgroundSection?.querySelector('.max-h-36.overflow-y-auto')).toBeInTheDocument()
-    expect(subagentsSection?.querySelector('.max-h-36.overflow-y-auto')).toBeInTheDocument()
+    expect(tasksSection?.querySelector('.max-h-44.overflow-y-auto')).toBeInTheDocument()
+    expect(teamSection?.querySelector('.max-h-36.overflow-y-auto')).toBeInTheDocument()
+    expect(backgroundSection?.querySelector('.max-h-40.overflow-y-auto')).toBeInTheDocument()
+    expect(subagentsSection?.querySelector('.max-h-40.overflow-y-auto')).toBeInTheDocument()
   })
 
   it('opens a SubAgent row when the row is openable', () => {

@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { buildSessionActivityModel } from './sessionActivityModel'
+import {
+  buildSessionActivityModel,
+  getVisibleActivitySections,
+  hasVisibleSessionActivity,
+} from './sessionActivityModel'
 import { createBackgroundTaskDismissKey } from '../../lib/backgroundTasks'
 import type { BackgroundAgentTask, AgentTaskNotification, UIMessage } from '../../types/chat'
 import type { CLITask } from '../../types/cliTask'
@@ -77,6 +81,167 @@ const agentMessages: UIMessage[] = [
 ]
 
 describe('buildSessionActivityModel', () => {
+  it('reports no visible activity for an empty model', () => {
+    const model = buildSessionActivityModel({
+      sessionId: 'session-1',
+      tasks: [],
+      completedAndDismissed: false,
+      backgroundTasks: [],
+      agentNotifications: [],
+    })
+
+    expect(hasVisibleSessionActivity(model)).toBe(false)
+    expect(getVisibleActivitySections(model)).toEqual([])
+    expect(model.badgeCount).toBe(0)
+  })
+
+  it('keeps completed TodoWrite historical tasks visible without badge attention', () => {
+    const model = buildSessionActivityModel({
+      sessionId: 'session-1',
+      messages: [{
+        id: 'todo-1',
+        type: 'tool_use',
+        toolName: 'TodoWrite',
+        toolUseId: 'todo-1',
+        input: {
+          todos: [
+            { content: '审查现有实现', status: 'completed' },
+          ],
+        },
+        timestamp: 1000,
+      }],
+      tasks: [],
+      completedAndDismissed: false,
+      backgroundTasks: [],
+      agentNotifications: [],
+    })
+
+    expect(hasVisibleSessionActivity(model)).toBe(true)
+    expect(getVisibleActivitySections(model).map((section) => section.id)).toEqual(['tasks'])
+    expect(model.badgeCount).toBe(0)
+  })
+
+  it('keeps completed Agent tool_use/tool_result rows visible without badge attention', () => {
+    const model = buildSessionActivityModel({
+      sessionId: 'session-1',
+      messages: [agentMessages[0]!, agentMessages[1]!],
+      tasks: [],
+      completedAndDismissed: false,
+      backgroundTasks: [],
+      agentNotifications: [],
+    })
+
+    expect(hasVisibleSessionActivity(model)).toBe(true)
+    expect(getVisibleActivitySections(model).map((section) => section.id)).toEqual(['subagents'])
+    expect(model.badgeCount).toBe(0)
+  })
+
+  it('counts running and failed rows as visible while preserving badge attention semantics', () => {
+    const model = buildSessionActivityModel({
+      sessionId: 'session-1',
+      tasks: [
+        task({ id: '1', subject: 'Implement', status: 'in_progress' }),
+      ],
+      completedAndDismissed: false,
+      backgroundTasks: [
+        background({ taskId: 'agent-1', toolUseId: 'tool-1', status: 'failed', taskType: 'local_agent' }),
+        background({ taskId: 'bg-2', toolUseId: 'tool-2', status: 'running', taskType: 'local_bash' }),
+      ],
+      agentNotifications: [],
+    })
+
+    expect(hasVisibleSessionActivity(model)).toBe(true)
+    expect(getVisibleActivitySections(model).map((section) => section.id)).toEqual([
+      'tasks',
+      'backgroundTasks',
+      'subagents',
+    ])
+    expect(model.badgeCount).toBe(3)
+  })
+
+  it('counts running team members as badge attention', () => {
+    const model = buildSessionActivityModel({
+      sessionId: 'session-1',
+      tasks: [],
+      completedAndDismissed: false,
+      backgroundTasks: [],
+      agentNotifications: [],
+      teamMembers: [
+        { agentId: 'security', role: 'Security reviewer', status: 'running' },
+        { agentId: 'performance', role: 'Performance reviewer', status: 'completed' },
+      ],
+    })
+
+    expect(hasVisibleSessionActivity(model)).toBe(true)
+    expect(getVisibleActivitySections(model).map((section) => section.id)).toEqual(['team'])
+    expect(model.badgeCount).toBe(1)
+  })
+
+  it('counts error team members as badge attention', () => {
+    const model = buildSessionActivityModel({
+      sessionId: 'session-1',
+      tasks: [],
+      completedAndDismissed: false,
+      backgroundTasks: [],
+      agentNotifications: [],
+      teamMembers: [
+        { agentId: 'security', role: 'Security reviewer', status: 'error' },
+      ],
+    })
+
+    expect(hasVisibleSessionActivity(model)).toBe(true)
+    expect(getVisibleActivitySections(model).map((section) => section.id)).toEqual(['team'])
+    expect(model.badgeCount).toBe(1)
+  })
+
+  it('does not count output-only rows as visible activity', () => {
+    const model = buildSessionActivityModel({
+      sessionId: 'session-1',
+      tasks: [],
+      completedAndDismissed: false,
+      backgroundTasks: [],
+      agentNotifications: [
+        notification({
+          taskId: 'bg-bash-1',
+          toolUseId: 'bash-tool-1',
+          status: 'completed',
+          summary: 'Task completed',
+          outputFile: '/tmp/bg-test.log',
+        }),
+      ],
+    })
+
+    expect(model.sections.output.rows).toHaveLength(1)
+    expect(hasVisibleSessionActivity(model)).toBe(false)
+    expect(getVisibleActivitySections(model)).toEqual([])
+    expect(model.badgeCount).toBe(0)
+  })
+
+  it('does not keep Activity visible for dismissed finished background tasks', () => {
+    const dismissedTask = background({
+      taskId: 'bg-1',
+      toolUseId: 'tool-1',
+      status: 'completed',
+      taskType: 'local_bash',
+      startedAt: 1000,
+      description: 'Dismissed run',
+    })
+
+    const model = buildSessionActivityModel({
+      sessionId: 'session-1',
+      tasks: [],
+      completedAndDismissed: false,
+      backgroundTasks: [dismissedTask],
+      dismissedBackgroundTaskKeys: new Set([createBackgroundTaskDismissKey(dismissedTask)]),
+      agentNotifications: [],
+    })
+
+    expect(model.sections.backgroundTasks.rows).toHaveLength(0)
+    expect(hasVisibleSessionActivity(model)).toBe(false)
+    expect(getVisibleActivitySections(model)).toEqual([])
+    expect(model.badgeCount).toBe(0)
+  })
+
   it('counts incomplete tasks and running agent rows for the badge', () => {
     const model = buildSessionActivityModel({
       sessionId: 'session-1',

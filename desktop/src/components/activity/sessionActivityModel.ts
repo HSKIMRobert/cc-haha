@@ -56,7 +56,15 @@ export type BuildSessionActivityModelInput = {
   teamMembers?: TeamMember[]
 }
 
-const BADGE_STATUSES = new Set<ActivityStatus>(['pending', 'in_progress', 'running', 'failed'])
+export const VISIBLE_ACTIVITY_SECTION_ORDER = [
+  'tasks',
+  'team',
+  'backgroundTasks',
+  'subagents',
+  'sources',
+] as const satisfies readonly ActivitySectionId[]
+
+const BADGE_STATUSES = new Set<ActivityStatus>(['pending', 'in_progress', 'running', 'failed', 'error'])
 
 const SECTION_META: Record<ActivitySectionId, Pick<ActivitySection, 'title' | 'emptyLabel'>> = {
   output: { title: 'Output', emptyLabel: 'No output' },
@@ -85,6 +93,16 @@ function createSection(id: ActivitySectionId): ActivitySection {
     emptyLabel: SECTION_META[id].emptyLabel,
     rows: [],
   }
+}
+
+export function getVisibleActivitySections(model: SessionActivityModel): ActivitySection[] {
+  return VISIBLE_ACTIVITY_SECTION_ORDER
+    .map((sectionId) => model.sections[sectionId])
+    .filter((section) => section.rows.length > 0)
+}
+
+export function hasVisibleSessionActivity(model: SessionActivityModel): boolean {
+  return getVisibleActivitySections(model).length > 0
 }
 
 function isBadgeStatus(status: ActivityStatus): boolean {
@@ -619,6 +637,11 @@ export function buildSessionActivityModel(input: BuildSessionActivityModelInput)
 
   for (const member of input.teamMembers ?? []) {
     sections.team.rows.push(buildTeamRow(member))
+  }
+  for (const row of sections.team.rows) {
+    if (isBadgeStatus(row.status)) {
+      badgeCount += 1
+    }
   }
 
   const subagentRowsByKey = new Map<string, ActivityRow>()

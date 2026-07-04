@@ -2,8 +2,10 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import '@testing-library/jest-dom'
 import type { PerSessionState } from '../../stores/chatStore'
-import type { ChatState } from '../../types/chat'
+import type { ChatState, UIMessage } from '../../types/chat'
 import { browserHost } from '../../lib/desktopHost/browserHost'
+
+type ToolUseMessage = Extract<UIMessage, { type: 'tool_use' }>
 
 const startDraggingMock = vi.hoisted(() => vi.fn(() => Promise.resolve()))
 const getCurrentWindowMock = vi.hoisted(() => vi.fn(() => ({
@@ -46,6 +48,20 @@ function makeChatSession(chatState: ChatState): PerSessionState {
     composerDraft: null,
   }
 }
+
+const completedTodoWriteMessage = (overrides: Partial<ToolUseMessage> = {}): UIMessage => ({
+  id: 'todo-1',
+  type: 'tool_use',
+  toolName: 'TodoWrite',
+  toolUseId: 'todo-1',
+  input: {
+    todos: [
+      { content: 'Review existing implementation', status: 'completed' },
+    ],
+  },
+  timestamp: 1000,
+  ...overrides,
+})
 
 vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: getCurrentWindowMock,
@@ -182,6 +198,7 @@ describe('TabBar', () => {
     const { useBrowserPanelStore } = await import('../../stores/browserPanelStore')
     const { useActivityPanelStore } = await import('../../stores/activityPanelStore')
     const { useCLITaskStore } = await import('../../stores/cliTaskStore')
+    const { useTeamStore } = await import('../../stores/teamStore')
 
     useTabStore.setState({ tabs: [], activeTabId: null })
     useChatStore.setState({
@@ -200,17 +217,122 @@ describe('TabBar', () => {
     useBrowserPanelStore.setState(useBrowserPanelStore.getInitialState(), true)
     useActivityPanelStore.setState(useActivityPanelStore.getInitialState(), true)
     useCLITaskStore.setState(useCLITaskStore.getInitialState(), true)
+    useTeamStore.setState({
+      teams: [],
+      activeTeam: null,
+      memberColors: new Map(),
+      error: null,
+    })
 
     Reflect.deleteProperty(window, 'desktopHost')
     Reflect.deleteProperty(window, '__TAURI__')
   })
 
-  it('shows the activity button for active session tabs', async () => {
+  it('hides the activity button for no-activity chat session tabs', async () => {
+    const { TabBar } = await import('./TabBar')
+    const { useTabStore } = await import('../../stores/tabStore')
+    const { useChatStore } = await import('../../stores/chatStore')
+    const { useSessionStore } = await import('../../stores/sessionStore')
+    const sessionId = 'session-1'
+
+    useTabStore.setState({
+      tabs: [{ sessionId, title: 'Chat', type: 'session', status: 'idle' }],
+      activeTabId: sessionId,
+    })
+    useSessionStore.setState({
+      sessions: [{ id: sessionId, title: 'Chat', workDir: '/tmp/project', workDirExists: true }],
+    } as Partial<ReturnType<typeof useSessionStore.getState>>)
+    useChatStore.setState({
+      sessions: {
+        [sessionId]: makeChatSession('idle'),
+      },
+      disconnectSession: vi.fn(),
+    } as Partial<ReturnType<typeof useChatStore.getState>>)
+
+    await act(async () => {
+      render(<TabBar />)
+    })
+
+    expect(screen.queryByRole('button', { name: /activity/i })).not.toBeInTheDocument()
+  })
+
+  it('hides the activity button for output-only activity rows', async () => {
+    const { TabBar } = await import('./TabBar')
+    const { useTabStore } = await import('../../stores/tabStore')
+    const { useChatStore } = await import('../../stores/chatStore')
+    const { useSessionStore } = await import('../../stores/sessionStore')
+    const sessionId = 'session-1'
+    const chatSession = makeChatSession('idle')
+    chatSession.agentTaskNotifications = {
+      'bash-tool-1': {
+        taskId: 'bg-bash-1',
+        toolUseId: 'bash-tool-1',
+        status: 'completed',
+        summary: 'Task completed',
+        outputFile: '/tmp/bg-test.log',
+      },
+    }
+
+    useTabStore.setState({
+      tabs: [{ sessionId, title: 'Chat', type: 'session', status: 'idle' }],
+      activeTabId: sessionId,
+    })
+    useSessionStore.setState({
+      sessions: [{ id: sessionId, title: 'Chat', workDir: '/tmp/project', workDirExists: true }],
+    } as Partial<ReturnType<typeof useSessionStore.getState>>)
+    useChatStore.setState({
+      sessions: {
+        [sessionId]: chatSession,
+      },
+      disconnectSession: vi.fn(),
+    } as Partial<ReturnType<typeof useChatStore.getState>>)
+
+    await act(async () => {
+      render(<TabBar />)
+    })
+
+    expect(screen.queryByRole('button', { name: /activity/i })).not.toBeInTheDocument()
+    expect(screen.queryByTestId('session-activity-badge')).not.toBeInTheDocument()
+  })
+
+  it('shows the activity button for completed TodoWrite history without a badge', async () => {
+    const { TabBar } = await import('./TabBar')
+    const { useTabStore } = await import('../../stores/tabStore')
+    const { useChatStore } = await import('../../stores/chatStore')
+    const { useSessionStore } = await import('../../stores/sessionStore')
+    const sessionId = 'session-1'
+    const chatSession = makeChatSession('idle')
+    chatSession.messages = [completedTodoWriteMessage()]
+
+    useTabStore.setState({
+      tabs: [{ sessionId, title: 'Chat', type: 'session', status: 'idle' }],
+      activeTabId: sessionId,
+    })
+    useSessionStore.setState({
+      sessions: [{ id: sessionId, title: 'Chat', workDir: '/tmp/project', workDirExists: true }],
+    } as Partial<ReturnType<typeof useSessionStore.getState>>)
+    useChatStore.setState({
+      sessions: {
+        [sessionId]: chatSession,
+      },
+      disconnectSession: vi.fn(),
+    } as Partial<ReturnType<typeof useChatStore.getState>>)
+
+    await act(async () => {
+      render(<TabBar />)
+    })
+
+    expect(screen.getByRole('button', { name: /activity/i })).toBeInTheDocument()
+    expect(screen.queryByTestId('session-activity-badge')).not.toBeInTheDocument()
+  })
+
+  it('shows the activity button with a badge for running or failed activity', async () => {
     const { TabBar } = await import('./TabBar')
     const { useTabStore } = await import('../../stores/tabStore')
     const { useChatStore } = await import('../../stores/chatStore')
     const { useSessionStore } = await import('../../stores/sessionStore')
     const { useActivityPanelStore } = await import('../../stores/activityPanelStore')
+    const sessionId = 'session-1'
     const chatSession = makeChatSession('idle')
     chatSession.backgroundAgentTasks = {
       'agent-1': {
@@ -222,18 +344,27 @@ describe('TabBar', () => {
         startedAt: 1,
         updatedAt: 2,
       },
+      'agent-2': {
+        taskId: 'agent-2',
+        toolUseId: 'tool-2',
+        status: 'failed',
+        taskType: 'local_agent',
+        description: 'Report',
+        startedAt: 3,
+        updatedAt: 4,
+      },
     }
 
     useTabStore.setState({
-      tabs: [{ sessionId: 'session-1', title: 'Chat', type: 'session', status: 'idle' }],
-      activeTabId: 'session-1',
+      tabs: [{ sessionId, title: 'Chat', type: 'session', status: 'idle' }],
+      activeTabId: sessionId,
     })
     useSessionStore.setState({
-      sessions: [{ id: 'session-1', title: 'Chat', workDir: '/tmp/project', workDirExists: true }],
+      sessions: [{ id: sessionId, title: 'Chat', workDir: '/tmp/project', workDirExists: true }],
     } as Partial<ReturnType<typeof useSessionStore.getState>>)
     useChatStore.setState({
       sessions: {
-        'session-1': chatSession,
+        [sessionId]: chatSession,
       },
       disconnectSession: vi.fn(),
     } as Partial<ReturnType<typeof useChatStore.getState>>)
@@ -244,8 +375,8 @@ describe('TabBar', () => {
 
     const button = screen.getByRole('button', { name: /activity/i })
     expect(button).toBeInTheDocument()
-    expect(screen.getByTestId('session-activity-badge')).toHaveTextContent('1')
-    expect(useActivityPanelStore.getState().isOpen('session-1')).toBe(false)
+    expect(screen.getByTestId('session-activity-badge')).toHaveTextContent('2')
+    expect(useActivityPanelStore.getState().isOpen(sessionId)).toBe(false)
     expect(button).toHaveAttribute('aria-expanded', 'false')
     expect(button).toHaveAttribute('aria-pressed', 'false')
 
@@ -254,7 +385,133 @@ describe('TabBar', () => {
     expect(button).toHaveAttribute('data-active', 'true')
     expect(button).toHaveAttribute('aria-expanded', 'true')
     expect(button).toHaveAttribute('aria-pressed', 'true')
-    expect(useActivityPanelStore.getState().isOpen('session-1')).toBe(true)
+    expect(useActivityPanelStore.getState().isOpen(sessionId)).toBe(true)
+  })
+
+  it('shows the activity button for team members associated with the active session', async () => {
+    const { TabBar } = await import('./TabBar')
+    const { useTabStore } = await import('../../stores/tabStore')
+    const { useChatStore } = await import('../../stores/chatStore')
+    const { useSessionStore } = await import('../../stores/sessionStore')
+    const { useTeamStore } = await import('../../stores/teamStore')
+    const sessionId = 'session-team'
+
+    useTabStore.setState({
+      tabs: [{ sessionId, title: 'Team Chat', type: 'session', status: 'idle' }],
+      activeTabId: sessionId,
+    })
+    useSessionStore.setState({
+      sessions: [{ id: sessionId, title: 'Team Chat', workDir: '/tmp/project', workDirExists: true }],
+    } as Partial<ReturnType<typeof useSessionStore.getState>>)
+    useChatStore.setState({
+      sessions: {
+        [sessionId]: makeChatSession('idle'),
+      },
+      disconnectSession: vi.fn(),
+    } as Partial<ReturnType<typeof useChatStore.getState>>)
+    useTeamStore.setState({
+      activeTeam: {
+        name: 'review-team',
+        leadAgentId: 'lead',
+        leadSessionId: sessionId,
+        members: [
+          { agentId: 'lead', role: 'Lead', status: 'running' },
+          { agentId: 'security', role: 'Security reviewer', status: 'running' },
+        ],
+      },
+    } as Partial<ReturnType<typeof useTeamStore.getState>>)
+
+    await act(async () => {
+      render(<TabBar />)
+    })
+
+    expect(screen.getByRole('button', { name: /activity/i })).toBeInTheDocument()
+    expect(screen.getByTestId('session-activity-badge')).toHaveTextContent('1')
+  })
+
+  it('hides team-only activity when the active team belongs to another session', async () => {
+    const { TabBar } = await import('./TabBar')
+    const { useTabStore } = await import('../../stores/tabStore')
+    const { useChatStore } = await import('../../stores/chatStore')
+    const { useSessionStore } = await import('../../stores/sessionStore')
+    const { useTeamStore } = await import('../../stores/teamStore')
+    const sessionId = 'session-team'
+
+    useTabStore.setState({
+      tabs: [{ sessionId, title: 'Team Chat', type: 'session', status: 'idle' }],
+      activeTabId: sessionId,
+    })
+    useSessionStore.setState({
+      sessions: [{ id: sessionId, title: 'Team Chat', workDir: '/tmp/project', workDirExists: true }],
+    } as Partial<ReturnType<typeof useSessionStore.getState>>)
+    useChatStore.setState({
+      sessions: {
+        [sessionId]: makeChatSession('idle'),
+      },
+      disconnectSession: vi.fn(),
+    } as Partial<ReturnType<typeof useChatStore.getState>>)
+    useTeamStore.setState({
+      activeTeam: {
+        name: 'other-review-team',
+        leadAgentId: 'lead',
+        leadSessionId: 'other-session',
+        members: [
+          { agentId: 'security', role: 'Security reviewer', status: 'running' },
+        ],
+      },
+    } as Partial<ReturnType<typeof useTeamStore.getState>>)
+
+    await act(async () => {
+      render(<TabBar />)
+    })
+
+    expect(screen.queryByRole('button', { name: /activity/i })).not.toBeInTheDocument()
+    expect(screen.queryByTestId('session-activity-badge')).not.toBeInTheDocument()
+  })
+
+  it('shows the activity button when team activity arrives after initial render', async () => {
+    const { TabBar } = await import('./TabBar')
+    const { useTabStore } = await import('../../stores/tabStore')
+    const { useChatStore } = await import('../../stores/chatStore')
+    const { useSessionStore } = await import('../../stores/sessionStore')
+    const { useTeamStore } = await import('../../stores/teamStore')
+    const sessionId = 'session-team'
+
+    useTabStore.setState({
+      tabs: [{ sessionId, title: 'Team Chat', type: 'session', status: 'idle' }],
+      activeTabId: sessionId,
+    })
+    useSessionStore.setState({
+      sessions: [{ id: sessionId, title: 'Team Chat', workDir: '/tmp/project', workDirExists: true }],
+    } as Partial<ReturnType<typeof useSessionStore.getState>>)
+    useChatStore.setState({
+      sessions: {
+        [sessionId]: makeChatSession('idle'),
+      },
+      disconnectSession: vi.fn(),
+    } as Partial<ReturnType<typeof useChatStore.getState>>)
+
+    await act(async () => {
+      render(<TabBar />)
+    })
+
+    expect(screen.queryByRole('button', { name: /activity/i })).not.toBeInTheDocument()
+
+    await act(async () => {
+      useTeamStore.setState({
+        activeTeam: {
+          name: 'review-team',
+          leadAgentId: 'lead',
+          leadSessionId: sessionId,
+          members: [
+            { agentId: 'security', role: 'Security reviewer', status: 'error' },
+          ],
+        },
+      } as Partial<ReturnType<typeof useTeamStore.getState>>)
+    })
+
+    expect(screen.getByRole('button', { name: /activity/i })).toBeInTheDocument()
+    expect(screen.getByTestId('session-activity-badge')).toHaveTextContent('1')
   })
 
   it('does not show the activity button for settings tabs', async () => {
@@ -420,7 +677,7 @@ describe('TabBar', () => {
       render(<TabBar />)
     })
 
-    expect(screen.getByRole('button', { name: /activity/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /activity/i })).not.toBeInTheDocument()
     expect(screen.queryByTestId('session-activity-badge')).not.toBeInTheDocument()
   })
 

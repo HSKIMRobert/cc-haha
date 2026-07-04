@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, createEvent, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { act } from 'react'
 
@@ -579,6 +579,203 @@ describe('ActiveSession task polling', () => {
     expect(screen.queryByTestId('background-tasks-button')).not.toBeInTheDocument()
   })
 
+  it('does not render the activity panel when the store is open without visible activity', async () => {
+    const sessionId = 'activity-open-empty-session'
+
+    useActivityPanelStore.getState().open(sessionId)
+    useSessionStore.setState({
+      sessions: [{
+        id: sessionId,
+        title: 'Empty Activity Session',
+        createdAt: '2026-05-07T00:00:00.000Z',
+        modifiedAt: '2026-05-07T00:00:00.000Z',
+        messageCount: 1,
+        projectPath: '/workspace/project',
+        workDir: '/workspace/project',
+        workDirExists: true,
+      }],
+      activeSessionId: sessionId,
+      isLoading: false,
+      error: null,
+    })
+    useTabStore.setState({
+      tabs: [{ sessionId, title: 'Empty Activity Session', type: 'session', status: 'idle' }],
+      activeTabId: sessionId,
+    })
+    useChatStore.setState({
+      sessions: {
+        [sessionId]: {
+          messages: [{ id: 'msg-1', type: 'assistant_text', content: 'hello', timestamp: 1 }],
+          chatState: 'idle',
+          connectionState: 'connected',
+          streamingText: '',
+          streamingToolInput: '',
+          activeToolUseId: null,
+          activeToolName: null,
+          activeThinkingId: null,
+          pendingPermission: null,
+          pendingComputerUsePermission: null,
+          tokenUsage: { input_tokens: 0, output_tokens: 0 },
+          streamingResponseChars: 0,
+          elapsedSeconds: 0,
+          statusVerb: '',
+          slashCommands: [],
+          backgroundAgentTasks: {},
+          agentTaskNotifications: {},
+          elapsedTimer: null,
+        },
+      },
+    })
+
+    render(<ActiveSession />)
+
+    expect(screen.queryByTestId('session-activity-panel')).not.toBeInTheDocument()
+    await waitFor(() => {
+      expect(useActivityPanelStore.getState().isOpen(sessionId)).toBe(false)
+    })
+  })
+
+  it('renders completed historical TodoWrite activity in the rail', () => {
+    const sessionId = 'activity-todowrite-history-session'
+
+    useActivityPanelStore.getState().open(sessionId)
+    useSessionStore.setState({
+      sessions: [{
+        id: sessionId,
+        title: 'TodoWrite History Session',
+        createdAt: '2026-05-07T00:00:00.000Z',
+        modifiedAt: '2026-05-07T00:00:00.000Z',
+        messageCount: 1,
+        projectPath: '/workspace/project',
+        workDir: '/workspace/project',
+        workDirExists: true,
+      }],
+      activeSessionId: sessionId,
+      isLoading: false,
+      error: null,
+    })
+    useTabStore.setState({
+      tabs: [{ sessionId, title: 'TodoWrite History Session', type: 'session', status: 'idle' }],
+      activeTabId: sessionId,
+    })
+    useChatStore.setState({
+      sessions: {
+        [sessionId]: {
+          messages: [{
+            id: 'todo-1',
+            type: 'tool_use',
+            toolName: 'TodoWrite',
+            toolUseId: 'todo-1',
+            input: {
+              todos: [
+                { content: 'Review historical implementation', status: 'completed' },
+              ],
+            },
+            timestamp: 1,
+          }],
+          chatState: 'idle',
+          connectionState: 'connected',
+          streamingText: '',
+          streamingToolInput: '',
+          activeToolUseId: null,
+          activeToolName: null,
+          activeThinkingId: null,
+          pendingPermission: null,
+          pendingComputerUsePermission: null,
+          tokenUsage: { input_tokens: 0, output_tokens: 0 },
+          streamingResponseChars: 0,
+          elapsedSeconds: 0,
+          statusVerb: '',
+          slashCommands: [],
+          backgroundAgentTasks: {},
+          agentTaskNotifications: {},
+          elapsedTimer: null,
+        },
+      },
+    })
+
+    render(<ActiveSession />)
+
+    const panel = screen.getByTestId('session-activity-panel')
+    expect(panel).toHaveAttribute('data-placement', 'rail')
+    expect(within(panel).getByText('Review historical implementation')).toBeInTheDocument()
+  })
+
+  it('ignores unrelated active team rows when deciding Activity visibility', async () => {
+    const sessionId = 'activity-unrelated-team-session'
+
+    useActivityPanelStore.getState().open(sessionId)
+    useTeamStore.setState({
+      teams: [],
+      activeTeam: {
+        name: 'other-team',
+        leadAgentId: 'team-lead@other-team',
+        leadSessionId: 'other-session',
+        members: [
+          {
+            agentId: 'security-reviewer@other-team',
+            role: 'security-reviewer',
+            status: 'running',
+            currentTask: 'Auditing another session',
+          },
+        ],
+      },
+      memberColors: new Map(),
+      error: null,
+    })
+    useSessionStore.setState({
+      sessions: [{
+        id: sessionId,
+        title: 'Unrelated Team Session',
+        createdAt: '2026-05-07T00:00:00.000Z',
+        modifiedAt: '2026-05-07T00:00:00.000Z',
+        messageCount: 1,
+        projectPath: '/workspace/project',
+        workDir: '/workspace/project',
+        workDirExists: true,
+      }],
+      activeSessionId: sessionId,
+      isLoading: false,
+      error: null,
+    })
+    useTabStore.setState({
+      tabs: [{ sessionId, title: 'Unrelated Team Session', type: 'session', status: 'idle' }],
+      activeTabId: sessionId,
+    })
+    useChatStore.setState({
+      sessions: {
+        [sessionId]: {
+          messages: [{ id: 'msg-1', type: 'assistant_text', content: 'hello', timestamp: 1 }],
+          chatState: 'idle',
+          connectionState: 'connected',
+          streamingText: '',
+          streamingToolInput: '',
+          activeToolUseId: null,
+          activeToolName: null,
+          activeThinkingId: null,
+          pendingPermission: null,
+          pendingComputerUsePermission: null,
+          tokenUsage: { input_tokens: 0, output_tokens: 0 },
+          streamingResponseChars: 0,
+          elapsedSeconds: 0,
+          statusVerb: '',
+          slashCommands: [],
+          backgroundAgentTasks: {},
+          agentTaskNotifications: {},
+          elapsedTimer: null,
+        },
+      },
+    })
+
+    render(<ActiveSession />)
+
+    expect(screen.queryByText('security-reviewer')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('session-activity-panel')).not.toBeInTheDocument()
+    await waitFor(() => {
+      expect(useActivityPanelStore.getState().isOpen(sessionId)).toBe(false)
+    })
+  })
+
   it('opens a SubAgent detail tab from the activity panel', () => {
     const sessionId = 'activity-subagent-open-session'
 
@@ -755,7 +952,7 @@ describe('ActiveSession task polling', () => {
     ]))
   })
 
-  it('clears finished background tasks in the activity panel without hiding later runs', () => {
+  it('clears the last visible background task by closing Activity while preserving later runs', () => {
     const sessionId = 'activity-background-clear-session'
     const otherSessionId = 'activity-background-other-session'
 
@@ -856,6 +1053,8 @@ describe('ActiveSession task polling', () => {
     fireEvent.click(screen.getByRole('button', { name: /clear finished/i }))
 
     expect(screen.queryByText('Finished smoke run')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('session-activity-panel')).not.toBeInTheDocument()
+    expect(useActivityPanelStore.getState().isOpen(sessionId)).toBe(false)
 
     act(() => {
       useTabStore.getState().setActiveTab(otherSessionId)
@@ -886,6 +1085,12 @@ describe('ActiveSession task polling', () => {
           },
         },
       }))
+    })
+
+    expect(screen.queryByText('Finished smoke rerun')).not.toBeInTheDocument()
+
+    act(() => {
+      useActivityPanelStore.getState().open(sessionId)
     })
 
     expect(screen.getByText('Finished smoke rerun')).toBeInTheDocument()
