@@ -185,7 +185,7 @@ describe('SkillCenter', () => {
     })
   })
 
-  it('renders marketplace cards with trust, preview, install, API key, and popularity signals', async () => {
+  it('renders marketplace cards with trust, details, install, API key, and popularity signals', async () => {
     mockedSkillMarketApi.list.mockResolvedValue({
       items: [
         makeItem({
@@ -227,7 +227,8 @@ describe('SkillCenter', () => {
     const crmCard = within(market).getByRole('button', { name: 'CRM Sync' })
     expect(vetterCard).toBeInTheDocument()
     expect(within(market).getAllByText('Clean').length).toBeGreaterThan(0)
-    expect(within(market).getAllByText('Preview').length).toBeGreaterThan(0)
+    expect(within(market).queryByText('Preview')).not.toBeInTheDocument()
+    expect(within(vetterCard).getByText('Details')).toBeInTheDocument()
     expect(within(weatherCard).getByText('Installed')).toBeInTheDocument()
     expect(within(crmCard).getByText('API key')).toBeInTheDocument()
     expect(within(vetterCard).getByText(/260\.9K|260,960/)).toBeInTheDocument()

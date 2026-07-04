@@ -582,7 +582,6 @@ function SkillMarketCard({
   const stats = formatStats(item, t)
   const sourceLabel = t(`skillCenter.marketplace.source.${item.source}`)
   const summary = item.summaryZh || item.summary
-  const hasPreview = Boolean(item.trustSummary || item.summary || item.summaryZh)
 
   return (
     <button
@@ -635,19 +634,11 @@ function SkillMarketCard({
             label={t('skillCenter.marketplace.installedBadge')}
           />
         ) : null}
-        {hasPreview ? (
-          <StateBadge
-            tone="neutral"
-            icon={<FileText size={12} aria-hidden="true" />}
-            label={t('skillCenter.marketplace.previewAvailable')}
-          />
-        ) : (
-          <StateBadge
-            tone="neutral"
-            icon={<FileText size={12} aria-hidden="true" />}
-            label={t('skillCenter.marketplace.noPreviewBadge')}
-          />
-        )}
+        <StateBadge
+          tone="neutral"
+          icon={<FileText size={12} aria-hidden="true" />}
+          label={t('skillCenter.marketplace.detailsBadge')}
+        />
         {item.requiresApiKey ? (
           <StateBadge
             tone="neutral"
