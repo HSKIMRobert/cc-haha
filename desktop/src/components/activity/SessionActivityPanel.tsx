@@ -16,6 +16,20 @@ type SessionActivityPanelPlacement = 'overlay' | 'rail'
 
 type TranslationFn = ReturnType<typeof useTranslation>
 
+const ACTIVITY_SCROLLBAR_CLASS = [
+  '[scrollbar-width:auto]',
+  '[scrollbar-color:color-mix(in_srgb,var(--color-outline)_62%,transparent)_transparent]',
+  '[&::-webkit-scrollbar]:w-2.5',
+  '[&::-webkit-scrollbar-track]:bg-transparent',
+  '[&::-webkit-scrollbar-thumb]:rounded-full',
+  '[&::-webkit-scrollbar-thumb]:border-[3px]',
+  '[&::-webkit-scrollbar-thumb]:border-transparent',
+  '[&::-webkit-scrollbar-thumb]:bg-[color-mix(in_srgb,var(--color-outline)_68%,transparent)]',
+  '[&::-webkit-scrollbar-thumb]:bg-clip-content',
+  '[&::-webkit-scrollbar-thumb:hover]:border-2',
+  '[&::-webkit-scrollbar-thumb:hover]:bg-[color-mix(in_srgb,var(--color-outline)_84%,transparent)]',
+].join(' ')
+
 function fallbackStatusLabel(status: ActivityRow['status']): string {
   const label = String(status).replace(/[_-]/g, ' ').replace(/\s+/g, ' ').trim()
   if (!label) return ''
@@ -63,22 +77,22 @@ function getSectionTitle(sectionId: ActivitySectionId, t: TranslationFn): string
 }
 
 function getSectionRowsClassName(sectionId: ActivitySectionId, rowCount: number): string {
-  const base = 'space-y-1'
+  const base = 'space-y-1.5'
   if (rowCount === 0) return base
 
   switch (sectionId) {
     case 'tasks':
-      return `${base} max-h-44 overflow-y-auto overscroll-contain pr-1`
+      return base
     case 'team':
-      return `${base} max-h-36 overflow-y-auto overscroll-contain pr-1`
+      return base
     case 'backgroundTasks':
-      return `${base} max-h-40 overflow-y-auto overscroll-contain pr-1`
+      return base
     case 'subagents':
-      return `${base} max-h-40 overflow-y-auto overscroll-contain pr-1`
+      return base
     case 'sources':
-      return `${base} max-h-28 overflow-y-auto overscroll-contain pr-1`
+      return base
     case 'output':
-      return `${base} max-h-28 overflow-y-auto overscroll-contain pr-1`
+      return base
   }
 }
 
@@ -263,7 +277,7 @@ function ActivityRowView({
     </>
   )
   const interactiveRowClassName =
-    'flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left transition-[background-color,transform] duration-150 ease-out hover:bg-[var(--color-surface-hover)] active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]'
+    'flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left transition-[background-color,transform] duration-150 ease-out hover:bg-[var(--color-surface-hover)] active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]'
 
   if (row.section === 'team' && row.member && onOpenMember) {
     return (
@@ -306,7 +320,7 @@ function ActivityRowView({
   }
 
   return (
-    <div className="flex items-center gap-2.5 rounded-xl px-3 py-2.5">
+    <div className="flex items-center gap-3 rounded-xl px-3 py-3">
       {content}
     </div>
   )
@@ -427,8 +441,8 @@ export function SessionActivityPanel({
 
   if (!open) return null
   const className = placement === 'rail'
-    ? 'my-4 ml-3 mr-4 flex max-h-[min(480px,calc(100vh-96px))] w-[340px] shrink-0 self-start flex-col overflow-hidden rounded-[24px] border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[0_26px_80px_-48px_rgba(15,23,42,0.58),0_12px_30px_-22px_rgba(15,23,42,0.34),inset_0_1px_0_rgba(255,255,255,0.82)]'
-    : 'absolute right-4 top-4 z-40 flex max-h-[calc(100%-112px)] w-[min(340px,calc(100%-32px))] flex-col overflow-hidden rounded-[24px] border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[0_26px_80px_-48px_rgba(15,23,42,0.58),0_12px_30px_-22px_rgba(15,23,42,0.34),inset_0_1px_0_rgba(255,255,255,0.82)]'
+    ? 'my-4 ml-3 mr-4 flex max-h-[min(620px,calc(100vh-72px))] w-[360px] shrink-0 self-start flex-col overflow-hidden rounded-[24px] border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[0_26px_80px_-48px_rgba(15,23,42,0.58),0_12px_30px_-22px_rgba(15,23,42,0.34),inset_0_1px_0_rgba(255,255,255,0.82)]'
+    : 'absolute right-4 top-4 z-40 flex max-h-[calc(100%-80px)] w-[min(360px,calc(100%-32px))] flex-col overflow-hidden rounded-[24px] border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[0_26px_80px_-48px_rgba(15,23,42,0.58),0_12px_30px_-22px_rgba(15,23,42,0.34),inset_0_1px_0_rgba(255,255,255,0.82)]'
 
   return (
     <div
@@ -451,7 +465,10 @@ export function SessionActivityPanel({
         </button>
       </div>
 
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 pb-5 pt-1">
+      <div
+        data-testid="session-activity-scroll"
+        className={`min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-5 pb-5 pt-1 ${ACTIVITY_SCROLLBAR_CLASS}`}
+      >
         {visibleSections.map((section, index) => {
           const sectionTitle = getSectionTitle(section.id, t)
 

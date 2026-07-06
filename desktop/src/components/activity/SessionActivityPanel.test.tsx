@@ -160,6 +160,7 @@ describe('SessionActivityPanel', () => {
     expect(screen.getByLabelText('Task completed')).toBeInTheDocument()
     expect(screen.getByLabelText('Task in progress')).toBeInTheDocument()
     expect(screen.getByLabelText('Task pending')).toBeInTheDocument()
+    expect(screen.getByText('Active task').closest('button,div')).toHaveClass('py-3')
     expect(screen.queryByText('Completed')).not.toBeInTheDocument()
     expect(screen.queryByText('Pending')).not.toBeInTheDocument()
   })
@@ -392,17 +393,17 @@ describe('SessionActivityPanel', () => {
     expect(screen.getByTestId('session-activity-panel')).toHaveAttribute('data-placement', 'rail')
     expect(screen.getByTestId('session-activity-panel')).toHaveClass('my-4')
     expect(screen.getByTestId('session-activity-panel')).toHaveClass('mr-4')
-    expect(screen.getByTestId('session-activity-panel')).toHaveClass('w-[340px]')
+    expect(screen.getByTestId('session-activity-panel')).toHaveClass('w-[360px]')
     expect(screen.getByTestId('session-activity-panel')).toHaveClass('rounded-[24px]')
     expect(screen.getByTestId('session-activity-panel')).toHaveClass('self-start')
-    expect(screen.getByTestId('session-activity-panel')).toHaveClass('max-h-[min(480px,calc(100vh-96px))]')
+    expect(screen.getByTestId('session-activity-panel')).toHaveClass('max-h-[min(620px,calc(100vh-72px))]')
     expect(screen.getByTestId('session-activity-panel')).not.toHaveClass('h-[calc(100%-24px)]')
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Outside' }))
 
     expect(onClose).not.toHaveBeenCalled()
   })
 
-  it('caps each populated activity section independently', () => {
+  it('uses one polished scroll owner instead of nested section scrollbars', () => {
     const taskRows = Array.from({ length: 12 }, (_, index) => ({
       id: `task-${index + 1}`,
       section: 'tasks' as const,
@@ -455,15 +456,19 @@ describe('SessionActivityPanel', () => {
       />,
     )
 
+    const scrollOwner = screen.getByTestId('session-activity-scroll')
     const tasksSection = document.querySelector('section[aria-label="Tasks"]')
     const teamSection = document.querySelector('section[aria-label="Team"]')
     const backgroundSection = document.querySelector('section[aria-label="Background Tasks"]')
     const subagentsSection = document.querySelector('section[aria-label="SubAgents"]')
 
-    expect(tasksSection?.querySelector('.max-h-44.overflow-y-auto')).toBeInTheDocument()
-    expect(teamSection?.querySelector('.max-h-36.overflow-y-auto')).toBeInTheDocument()
-    expect(backgroundSection?.querySelector('.max-h-40.overflow-y-auto')).toBeInTheDocument()
-    expect(subagentsSection?.querySelector('.max-h-40.overflow-y-auto')).toBeInTheDocument()
+    expect(scrollOwner).toHaveClass('overflow-y-auto')
+    expect(scrollOwner).toHaveClass('[scrollbar-width:auto]')
+    expect(scrollOwner).toHaveClass('[&::-webkit-scrollbar]:w-2.5')
+    expect(tasksSection?.querySelector('.overflow-y-auto')).not.toBeInTheDocument()
+    expect(teamSection?.querySelector('.overflow-y-auto')).not.toBeInTheDocument()
+    expect(backgroundSection?.querySelector('.overflow-y-auto')).not.toBeInTheDocument()
+    expect(subagentsSection?.querySelector('.overflow-y-auto')).not.toBeInTheDocument()
   })
 
   it('opens a SubAgent row when the row is openable', () => {

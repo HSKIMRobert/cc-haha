@@ -61,6 +61,7 @@ describe('SubagentRunPage', () => {
 
   afterEach(() => {
     cleanup()
+    vi.useRealTimers()
     vi.mocked(subagentsApi.getRunByTool).mockReset()
   })
 
@@ -72,16 +73,15 @@ describe('SubagentRunPage', () => {
     render(<SubagentRunPage sourceSessionId="session-1" toolUseId="tool-1" title="Kuhn" />)
 
     expect(await screen.findByText('Kuhn')).toBeInTheDocument()
-    expect(screen.getAllByText('Agent').length).toBeGreaterThan(0)
+    expect(screen.getByText('Agent: abc123')).toBeInTheDocument()
     expect(screen.getAllByText('Explore repo').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('Found layout seam').length).toBeGreaterThan(0)
     expect(screen.getByText('Output: /tmp/result.md')).toBeInTheDocument()
-    expect(screen.getByText('Parent Agent Tool Call')).toBeInTheDocument()
-    expect(document.body).toHaveTextContent('"prompt": "Read files"')
+    expect(screen.queryByText('Parent Agent Tool Call')).not.toBeInTheDocument()
+    expect(document.body).not.toHaveTextContent('"prompt": "Read files"')
     expect(screen.queryByText(/Dispatched an agent|派遣了一个代理/)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Open run/ })).not.toBeInTheDocument()
 
-    const transcript = screen.getByTestId('subagent-transcript')
+    const transcript = screen.getByTestId('subagent-conversation')
     expect(transcript).toHaveTextContent('Read files')
     expect(transcript).toHaveTextContent('Finding')
     expect(transcript).not.toHaveTextContent('assistant_text')
@@ -107,8 +107,33 @@ describe('SubagentRunPage', () => {
 
     render(<SubagentRunPage sourceSessionId="session-1" toolUseId="tool-1" title="SubAgent" />)
 
-    expect(await screen.findByText('No local transcript messages captured for this SubAgent.')).toBeInTheDocument()
-    expect(screen.getAllByText('Only summary available').length).toBeGreaterThan(0)
+    const conversation = await screen.findByTestId('subagent-conversation')
+    expect(conversation).toHaveTextContent('Only summary available')
+    expect(screen.queryByText('No local transcript messages captured for this SubAgent.')).not.toBeInTheDocument()
+  })
+
+  it('refreshes running SubAgent runs while the detail tab is open', async () => {
+    vi.mocked(subagentsApi.getRunByTool)
+      .mockResolvedValueOnce(subagentRun({
+        status: 'running',
+        messages: [],
+        prompt: 'Review streaming changes',
+      }))
+      .mockResolvedValueOnce(subagentRun({
+        status: 'completed',
+        messages: [],
+        prompt: 'Review streaming changes',
+        result: 'Streaming review complete',
+      }))
+
+    render(<SubagentRunPage sourceSessionId="session-1" toolUseId="tool-1" title="SubAgent" />)
+
+    expect(await screen.findByText('Running')).toBeInTheDocument()
+    expect(screen.getByTestId('subagent-conversation')).toHaveTextContent('Review streaming changes')
+
+    await waitFor(() => expect(subagentsApi.getRunByTool).toHaveBeenCalledTimes(2), { timeout: 2500 })
+    expect(await screen.findByText('Completed')).toBeInTheDocument()
+    expect(screen.getByTestId('subagent-conversation')).toHaveTextContent('Streaming review complete')
   })
 
   it('keeps the tab open on API errors', async () => {
@@ -145,7 +170,6 @@ describe('SubagentRunPage', () => {
       await second.promise
     })
 
-    expect((await screen.findAllByText('Second result')).length).toBeGreaterThan(0)
     expect(screen.getByText(/Second finding/)).toBeInTheDocument()
 
     await act(async () => {
@@ -163,14 +187,14 @@ describe('SubagentRunPage', () => {
       await first.promise
     })
 
-    expect(screen.getAllByText('Second result').length).toBeGreaterThan(0)
+    expect(screen.getByText(/Second finding/)).toBeInTheDocument()
     expect(screen.queryByText('Stale first result')).not.toBeInTheDocument()
     expect(screen.queryByText(/Stale finding/)).not.toBeInTheDocument()
   })
 
   it('keeps existing details visible when refresh fails', async () => {
     vi.mocked(subagentsApi.getRunByTool)
-      .mockResolvedValueOnce(subagentRun({ summary: 'Initial result' }))
+      .mockResolvedValueOnce(subagentRun({ messages: [], summary: 'Initial result' }))
       .mockRejectedValueOnce(new Error('refresh failed'))
 
     render(<SubagentRunPage sourceSessionId="session-1" toolUseId="tool-1" title="SubAgent" />)

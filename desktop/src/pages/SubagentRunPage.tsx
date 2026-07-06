@@ -6,15 +6,13 @@ import {
   type SubagentRunStatus,
 } from '../api/subagents'
 import { buildRenderModel, MessageBlock } from '../components/chat/MessageList'
-import { ToolCallBlock } from '../components/chat/ToolCallBlock'
 import { ToolCallGroup } from '../components/chat/ToolCallGroup'
 import { useTranslation } from '../i18n'
 import { mapHistoryMessagesToUiMessages } from '../stores/chatStore'
 import type { AgentTaskNotification, UIMessage } from '../types/chat'
 
-type ToolCall = Extract<UIMessage, { type: 'tool_use' }>
-type ToolResult = Extract<UIMessage, { type: 'tool_result' }>
 type TranslationFn = ReturnType<typeof useTranslation>
+const LIVE_RUN_REFRESH_MS = 2000
 
 export function SubagentRunPage({
   sourceSessionId,
@@ -53,6 +51,16 @@ export function SubagentRunPage({
   useEffect(() => {
     void load({ resetData: true })
   }, [load])
+
+  useEffect(() => {
+    if (data?.status !== 'running' || loading) return
+
+    const timer = window.setTimeout(() => {
+      void load()
+    }, LIVE_RUN_REFRESH_MS)
+
+    return () => window.clearTimeout(timer)
+  }, [data?.status, load, loading])
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-[var(--color-surface)] text-[var(--color-text-primary)]">
@@ -96,8 +104,6 @@ export function SubagentRunPage({
 
 function SubagentRunDetails({ data }: { data: SubagentRunResponse }) {
   const t = useTranslation()
-  const agentToolCall = useMemo(() => buildAgentToolCall(data), [data])
-  const agentToolResult = useMemo(() => buildAgentToolResult(data, t), [data, t])
 
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-5">
@@ -105,6 +111,12 @@ function SubagentRunDetails({ data }: { data: SubagentRunResponse }) {
         <span>{t('subagentRun.source')}: {sourceLabel(data.source, t)}</span>
         <span aria-hidden="true">/</span>
         <span>{t('subagentRun.agent')}: {data.agentId ?? t('subagentRun.unknown')}</span>
+        {data.description ? (
+          <>
+            <span aria-hidden="true">/</span>
+            <span>{data.description}</span>
+          </>
+        ) : null}
         {data.taskId ? (
           <>
             <span aria-hidden="true">/</span>
@@ -127,30 +139,17 @@ function SubagentRunDetails({ data }: { data: SubagentRunResponse }) {
         ) : null}
       </div>
 
-      <section aria-label={t('subagentRun.parentToolInput')}>
-        <h2 className="mb-2 text-xs font-semibold uppercase tracking-normal text-[var(--color-text-tertiary)]">{t('subagentRun.parentToolCall')}</h2>
-        <ToolCallBlock
-          toolName="Agent"
-          input={agentToolCall.input}
-          result={agentToolResult}
-          isPending={data.status === 'running' && !agentToolResult}
-          defaultExpanded
-        />
-      </section>
-
-      <TranscriptSection data={data} />
+      <ConversationSection data={data} />
     </div>
   )
 }
 
 const EMPTY_AGENT_TASK_NOTIFICATIONS: Record<string, AgentTaskNotification> = {}
 
-function TranscriptSection({ data }: { data: SubagentRunResponse }) {
+function ConversationSection({ data }: { data: SubagentRunResponse }) {
   const t = useTranslation()
-  const transcriptMessages = useMemo(() => (
-    mapHistoryMessagesToUiMessages(data.messages, { includeTeammateMessages: true })
-  ), [data.messages])
-  const renderModel = useMemo(() => buildRenderModel(transcriptMessages), [transcriptMessages])
+  const conversationMessages = useMemo(() => buildSubagentConversationMessages(data), [data])
+  const renderModel = useMemo(() => buildRenderModel(conversationMessages), [conversationMessages])
 
   if (renderModel.renderItems.length === 0) {
     return (
@@ -171,7 +170,7 @@ function TranscriptSection({ data }: { data: SubagentRunResponse }) {
           <span className="text-[11px] text-[var(--color-text-tertiary)]">{t('subagentRun.truncated')}</span>
         ) : null}
       </div>
-      <div data-testid="subagent-transcript" className="space-y-3">
+      <div data-testid="subagent-conversation" className="space-y-3">
         {renderModel.renderItems.map((item) => {
           if (item.kind === 'tool_group') {
             return (
@@ -265,38 +264,44 @@ function timestampMs(value: string | undefined) {
   return Number.isFinite(time) ? time : Date.now()
 }
 
-function buildAgentToolCall(data: SubagentRunResponse): ToolCall {
-  return {
-    id: `subagent-tool-${data.toolUseId}`,
-    type: 'tool_use',
-    toolName: 'Agent',
-    toolUseId: data.toolUseId,
-    input: {
-      ...(data.description ? { description: data.description } : {}),
-      ...(data.prompt ? { prompt: data.prompt } : {}),
-    },
-    timestamp: timestampMs(data.updatedAt),
-  }
+function normalizedText(value: string | undefined) {
+  return (value ?? '').replace(/\s+/g, ' ').trim()
 }
 
-function buildAgentToolResult(data: SubagentRunResponse, t: TranslationFn): ToolResult | null {
-  const resultText = data.result || data.summary
-  if (!resultText && data.status === 'running') return null
-  if (!resultText && data.status === 'unknown') return null
+function hasPromptMessage(messages: UIMessage[], prompt: string) {
+  const normalizedPrompt = normalizedText(prompt)
+  if (!normalizedPrompt) return false
 
-  return {
-    id: `subagent-result-${data.toolUseId}`,
-    type: 'tool_result',
-    toolUseId: data.toolUseId,
-    content: resultText || statusFallbackResult(data.status, t),
-    isError: data.status === 'failed' || data.status === 'stopped',
-    timestamp: timestampMs(data.updatedAt),
-  }
+  return messages.some((message) => (
+    message.type === 'user_text' &&
+    normalizedText(message.content) === normalizedPrompt
+  ))
 }
 
-function statusFallbackResult(status: SubagentRunStatus, t: TranslationFn) {
-  if (status === 'completed') return t('subagentRun.result.completedFallback')
-  if (status === 'failed') return t('subagentRun.result.failedFallback')
-  if (status === 'stopped') return t('subagentRun.result.stoppedFallback')
-  return t('subagentRun.result.noneFallback')
+function buildSubagentConversationMessages(data: SubagentRunResponse): UIMessage[] {
+  const transcriptMessages = mapHistoryMessagesToUiMessages(data.messages, { includeTeammateMessages: true })
+  const messages = [...transcriptMessages]
+  const prompt = data.prompt?.trim()
+  const baseTimestamp = timestampMs(data.updatedAt)
+
+  if (prompt && !hasPromptMessage(transcriptMessages, prompt)) {
+    messages.unshift({
+      id: `subagent-prompt-${data.toolUseId}`,
+      type: 'user_text',
+      content: prompt,
+      timestamp: baseTimestamp - 1,
+    })
+  }
+
+  const resultText = (data.result || data.summary)?.trim()
+  if (transcriptMessages.length === 0 && resultText) {
+    messages.push({
+      id: `subagent-result-message-${data.toolUseId}`,
+      type: 'assistant_text',
+      content: resultText,
+      timestamp: baseTimestamp,
+    })
+  }
+
+  return messages
 }

@@ -302,6 +302,7 @@ export function ActiveSession() {
   const hasIncompleteTasks = cliTasks.some((task) => task.status !== 'completed')
   const hasRunningTasks = cliTasks.some((task) => task.status === 'in_progress')
   const isActivityPanelOpen = useActivityPanelStore((state) => activeTabId ? state.isOpen(activeTabId) : false)
+  const openActivityPanel = useActivityPanelStore((state) => state.open)
   const closeActivityPanel = useActivityPanelStore((state) => state.close)
   const dismissBackgroundTaskKeys = useActivityPanelStore((state) => state.dismissBackgroundTaskKeys)
   const pruneDismissedBackgroundTaskKeys = useActivityPanelStore((state) => state.pruneDismissedBackgroundTaskKeys)
@@ -336,6 +337,7 @@ export function ActiveSession() {
       : undefined,
   )
   const terminalPanelHeight = useTerminalPanelStore((state) => state.height)
+  const activityVisibilityBySessionRef = useRef<Record<string, { hadAutoOpenActivity: boolean }>>({})
 
   useEffect(() => {
     if (activeTabId && !isMemberSession) {
@@ -442,6 +444,31 @@ export function ActiveSession() {
     trackedTaskSessionId,
   ])
   const hasVisibleActivity = activityModel ? hasVisibleSessionActivity(activityModel) : false
+  const hasAutoOpenActivity = activityModel ? activityModel.badgeCount > 0 : false
+
+  useEffect(() => {
+    if (!activeTabId || isMemberSession || !isSessionTabState(activeTabId, activeTabType)) return
+
+    const state = activityVisibilityBySessionRef.current[activeTabId]
+    if (!state) {
+      activityVisibilityBySessionRef.current[activeTabId] = {
+        hadAutoOpenActivity: hasAutoOpenActivity,
+      }
+      return
+    }
+
+    if (!state.hadAutoOpenActivity && hasAutoOpenActivity && !isActivityPanelOpen) {
+      openActivityPanel(activeTabId)
+    }
+    state.hadAutoOpenActivity = hasAutoOpenActivity
+  }, [
+    activeTabId,
+    activeTabType,
+    hasAutoOpenActivity,
+    isActivityPanelOpen,
+    isMemberSession,
+    openActivityPanel,
+  ])
 
   useEffect(() => {
     if (!activeTabId || !isActivityPanelOpen || hasVisibleActivity) return
