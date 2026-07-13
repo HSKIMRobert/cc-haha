@@ -636,7 +636,7 @@ function Write-AppModeAtomically {
 function Invoke-LegacyRecovery {
   param(
     [Parameter(Mandatory = $true)][string[]]$InstallDirs,
-    [string[]]$SharedInstallDirs = @(),
+    [AllowEmptyCollection()][AllowEmptyString()][string[]]$SharedInstallDirs = @(),
     [Parameter(Mandatory = $true)][string]$UserDataDir,
     [Parameter(Mandatory = $true)][string]$RecoveryRoot,
     [Parameter(Mandatory = $true)][string]$ProcessName,
@@ -657,8 +657,12 @@ function Invoke-LegacyRecovery {
     -UserDataDir $UserDataDir `
     -ActiveConfigDir $ActiveConfigDir `
     -ActiveConfigManaged $ActiveConfigManaged
-  $potentialSharedInstallDirs = @(Get-PotentialInstallDirs -InstallDirs $SharedInstallDirs)
-  $existingSharedInstallDirs = @(Get-ExistingInstallDirs -InstallDirs $potentialSharedInstallDirs)
+  $sharedInstallDirInputs = @($SharedInstallDirs | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+  $existingSharedInstallDirs = @()
+  if ($sharedInstallDirInputs.Count -gt 0) {
+    $potentialSharedInstallDirs = @(Get-PotentialInstallDirs -InstallDirs $sharedInstallDirInputs)
+    $existingSharedInstallDirs = @(Get-ExistingInstallDirs -InstallDirs $potentialSharedInstallDirs)
+  }
   if ($existingSharedInstallDirs.Count -gt 0) {
     Assert-NoUndiscoveredLegacySources -InstallDirs $existingSharedInstallDirs -ActiveSource $source
   }
