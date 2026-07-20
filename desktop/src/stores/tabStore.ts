@@ -31,6 +31,7 @@ export type Tab = {
   sourceTurnKey?: string
   sourceElementId?: string
   subagentToolUseId?: string
+  subagentTaskId?: string
 }
 
 export type WorkbenchTabOrigin = {
@@ -54,7 +55,7 @@ type TabStore = {
   openTerminalTab: (cwd?: string, terminalRuntimeId?: string) => string
   openWorkbenchTab: (sessionId: string, title?: string, origin?: WorkbenchTabOrigin) => string
   returnFromWorkbench: (tabId: string) => void
-  openSubagentTab: (sourceSessionId: string, toolUseId: string, title?: string) => string
+  openSubagentTab: (sourceSessionId: string, toolUseId: string, title?: string, taskId?: string) => string
   closeTab: (sessionId: string) => void
   setActiveTab: (sessionId: string) => void
   updateTabTitle: (sessionId: string, title: string) => void
@@ -218,7 +219,7 @@ export const useTabStore = create<TabStore>((set, get) => ({
     get().closeTab(tabId)
   },
 
-  openSubagentTab: (sourceSessionId, toolUseId, title = 'SubAgent') => {
+  openSubagentTab: (sourceSessionId, toolUseId, title = 'SubAgent', taskId) => {
     const tabId = `${SUBAGENT_TAB_PREFIX}${sourceSessionId}__${toolUseId}`
     const { tabs } = get()
     const existing = tabs.find((tab) => tab.sessionId === tabId)
@@ -229,6 +230,7 @@ export const useTabStore = create<TabStore>((set, get) => ({
       status: 'idle',
       sourceSessionId,
       subagentToolUseId: toolUseId,
+      ...(taskId ? { subagentTaskId: taskId } : {}),
     }
 
     set({

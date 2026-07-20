@@ -9,6 +9,7 @@ import { formatTokenCount } from '../../lib/formatTokenCount'
 
 export type OpenSubagentPayload = {
   sessionId: string
+  taskId?: string
   toolUseId: string
   title: string
 }
@@ -389,7 +390,12 @@ function ActivityRowView({
       <button
         type="button"
         aria-label={`${t('session.activity.openRun', { name: row.label })} · ${statusLabel}`}
-        onClick={() => onOpenSubagent({ sessionId, toolUseId: row.toolUseId!, title: row.label })}
+        onClick={() => onOpenSubagent({
+          sessionId,
+          ...(row.taskId ? { taskId: row.taskId } : {}),
+          toolUseId: row.toolUseId!,
+          title: row.label,
+        })}
         className={`${interactiveRowClassName} ${stopButton ? 'flex-1' : 'w-full'}`}
       >
         {content}

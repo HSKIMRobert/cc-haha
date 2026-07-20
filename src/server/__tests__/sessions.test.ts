@@ -3426,6 +3426,60 @@ describe('Sessions API', () => {
     expect(body.messages).toHaveLength(2)
   })
 
+  it('GET /api/sessions/:id/subagents/by-tool/:toolUseId should use a live task id while running', async () => {
+    const sessionId = 'edededed-bbbb-cccc-dddd-eeeeeeeeeeee'
+    const projectDir = '-tmp-api-live-subagent-run'
+    const agentId = 'abc123'
+    await writeSessionFile(projectDir, sessionId, [
+      makeSnapshotEntry(),
+      makeAssistantToolUseEntry([{
+        id: 'tool-1',
+        name: 'Agent',
+        input: { description: 'Inspect live seam', prompt: 'Read the route' },
+      }]),
+    ])
+    await writeSubagentTranscriptFile(projectDir, sessionId, agentId, [
+      {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'child-tool-1', name: 'Read', input: {} }],
+        },
+        uuid: crypto.randomUUID(),
+        timestamp: '2026-01-01T00:00:04.000Z',
+      },
+      {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: 'child-tool-1', content: 'route source' }],
+        },
+        uuid: crypto.randomUUID(),
+        timestamp: '2026-01-01T00:00:05.000Z',
+      },
+    ])
+
+    const res = await fetch(
+      `${baseUrl}/api/sessions/${sessionId}/subagents/by-tool/tool-1?taskId=${agentId}`,
+    )
+    expect(res.status).toBe(200)
+
+    const body = (await res.json()) as {
+      agentId: string | null
+      taskId?: string
+      status: string
+      messages: unknown[]
+      source: string
+    }
+    expect(body).toMatchObject({
+      agentId,
+      taskId: agentId,
+      status: 'running',
+      source: 'subagent-jsonl',
+    })
+    expect(body.messages).toHaveLength(2)
+  })
+
   it('POST /api/sessions/:id/subagents/by-tool/:toolUseId should return 405', async () => {
     const res = await fetch(
       `${baseUrl}/api/sessions/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/subagents/by-tool/tool-1`,

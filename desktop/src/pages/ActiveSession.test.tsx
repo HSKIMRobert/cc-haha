@@ -1006,6 +1006,7 @@ describe('ActiveSession task polling', () => {
       status: 'idle',
       sourceSessionId: sessionId,
       subagentToolUseId: 'agent-tool-1',
+      subagentTaskId: 'agent-task-1',
     })
     expect(useTabStore.getState().activeTabId).toBe('__subagent__activity-subagent-open-session__agent-tool-1')
   })

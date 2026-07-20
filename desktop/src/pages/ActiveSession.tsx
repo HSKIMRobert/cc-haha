@@ -481,8 +481,8 @@ export function ActiveSession() {
     closeActivityPanel(activeTabId)
   }, [activeTabId, closeActivityPanel, isActivityPanelOpen, showWorkbench])
 
-  const handleOpenSubagentRun = useCallback((payload: { sessionId: string; toolUseId: string; title: string }) => {
-    useTabStore.getState().openSubagentTab(payload.sessionId, payload.toolUseId, payload.title)
+  const handleOpenSubagentRun = useCallback((payload: { sessionId: string; taskId?: string; toolUseId: string; title: string }) => {
+    useTabStore.getState().openSubagentTab(payload.sessionId, payload.toolUseId, payload.title, payload.taskId)
   }, [])
   const handleOpenTeamMember = useCallback((member: TeamMember) => {
     useTeamStore.getState().openMemberSession(member)
